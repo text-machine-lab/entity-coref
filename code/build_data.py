@@ -9,11 +9,12 @@ import numpy as np
 import time
 from keras.preprocessing.sequence import pad_sequences
 import multiprocessing
+from itertools import combinations
 
 from word2vec import build_vocab
-from models import EMBEDDING_DIM, MAXLEN
+from models import EMBEDDING_DIM, MAXLEN, MAX_DISTANCE
 
-def build_dataFrame(path, threads=4):
+def build_dataFrame(path, threads=4, suffix='gold_conll'):
     def worker(pid):
         print("worker %d started..." % pid)
         df = None
@@ -37,7 +38,7 @@ def build_dataFrame(path, threads=4):
         return worker_alive
 
     assert os.path.isdir(path)
-    cmd = 'find ' + path + ' -name "*gold_conll"'
+    cmd = 'find ' + path + ' -name "*%s"' % suffix
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,stderr=subprocess.PIPE,shell=True,stdin=subprocess.PIPE)
     file_queue = multiprocessing.Queue()
     data_queue = multiprocessing.Queue(maxsize=10)
@@ -163,7 +164,7 @@ class Entity(object):
         return self.order, locations
 
     def get_context_representation(self):
-        left_edge = max(0, self.start_loc-5)
+        left_edge = max(0, self.start_loc - 5)
         left_words = [self.df.iloc[i].word for i in range(left_edge, self.start_loc)]
         right_edge = min(len(self.df), self.end_loc+6)
         right_words = [self.df.iloc[i].word for i in range(self.end_loc+1, right_edge)]
@@ -189,17 +190,20 @@ class DataGen(object):
         if not self.pos_tags:
             self.get_pos_tags()
 
-    def generate_input(self, negative_ratio=0.8, file_batch=100, looping=True):
+    def generate_input(self, negative_ratio=0.8, file_batch=100, looping=True, test_data=False):
         """Generate pairwise input
            negative_ratio = # negative / # total
         """
         assert negative_ratio is None or negative_ratio < 1
         doc_ids = self.df.doc_id.unique()
         data_q = deque()
-
+        if test_data:
+            file_batch = 1 # yield data from one file only
+            negative_ratio = None
         while True:
-            np.random.shuffle(doc_ids)
+            if not test_data: np.random.shuffle(doc_ids)
             for doc_id in doc_ids:
+                index_map = {}
                 # print("Generating data for %s" % doc_id)
                 doc_df = self.df.loc[self.df.doc_id == doc_id]
                 doc_coref_entities = get_entities(doc_df)
@@ -215,7 +219,8 @@ class DataGen(object):
 
                 if not entities:
                     continue
-                entities = [e[1] for e in sorted(entities, key=lambda x: x[0])]
+                entities = [e[1] for e in sorted(entities, key=lambda x: x[0])]  # sorted according to order
+                index = 0
 
                 # generate pairwise input. Process in narrative order
                 X0 = []
@@ -223,37 +228,54 @@ class DataGen(object):
                 X2 = []
                 X3 = []
                 X4 = []
+                X5 = []
                 Y = []
                 for i, entity in enumerate(entities):
                     for j in range(0, i):
                         distance = entity.order - entities[j].order
+                        if distance > MAX_DISTANCE:
+                            continue
+                        if entity.speaker == entities[j].speaker:
+                            same_speaker = 1
+                        else:
+                            same_speaker = 0
                         words_i = entity.context_words
+                        # words_i = entity.words
                         word_i_indexes = [self.word_indexes[word] if word in self.word_indexes else self.word_indexes['UKN'] for word in words_i]
                         pos_i = entity.context_pos
-                        pos_i_indexes = [self.pos_tags.index(pos) if pos in self.pos_tags else self.pos_tags.index('UKN') for pos in pos_i]
+                        # pos_i = entity.pos_tags
+                        pos_i_indexes = [self.pos_tags.index(pos)+1 if pos in self.pos_tags else self.pos_tags.index('UKN') for pos in pos_i]
                         words_j = entities[j].context_words
+                        # words_j = entities[j].words
                         word_j_indexes = [self.word_indexes[word] if word in self.word_indexes else self.word_indexes['UKN'] for word in words_j]
                         pos_j = entities[j].context_pos
-                        pos_j_indexes = [self.pos_tags.index(pos) if pos in self.pos_tags else self.pos_tags.index('UKN') for pos in pos_j]
+                        # pos_j = entities[j].pos_tags
+                        pos_j_indexes = [self.pos_tags.index(pos)+1 if pos in self.pos_tags else self.pos_tags.index('UKN') for pos in pos_j]
+                        y = int(entity.coref_id == entities[j].coref_id)
 
                         X0.append([distance]) # use list to add a dimension
-                        X1.append(word_i_indexes)
-                        X2.append(pos_i_indexes)
-                        X3.append(word_j_indexes)
-                        X4.append(pos_j_indexes)
-                        if entity.coref_id == entities[j].coref_id:
-                            Y.append(1)
-                        else:
-                            Y.append(0)
+                        X1.append([same_speaker])
+                        X2.append(word_i_indexes)
+                        X3.append(pos_i_indexes)
+                        X4.append(word_j_indexes)
+                        X5.append(pos_j_indexes)
+                        Y.append(y)
+                        if test_data:
+                            index_map[(doc_id, (entity.start_loc, entity.end_loc), (entities[j].start_loc, entities[j].end_loc))] = index
+                        index += 1
 
                 X0 = np.array(X0)
-                X1 = pad_sequences(X1, maxlen=MAXLEN + 10, dtype='int32', padding='pre', truncating='post', value=0)
-                X2 = pad_sequences(X2, maxlen=MAXLEN + 10, dtype='int32', padding='pre', truncating='post', value=0)
-                X3 = pad_sequences(X3, maxlen=MAXLEN + 10, dtype='int32', padding='pre', truncating='post', value=0)
-                X4 = pad_sequences(X4, maxlen=MAXLEN + 10, dtype='int32', padding='pre', truncating='post', value=0)
+                X1 = np.array(X1)
+                X2 = pad_sequences(X2, maxlen=MAXLEN, dtype='int32', padding='pre', truncating='post', value=0)
+                X3 = pad_sequences(X3, maxlen=MAXLEN, dtype='int32', padding='pre', truncating='post', value=0)
+                X4 = pad_sequences(X4, maxlen=MAXLEN, dtype='int32', padding='pre', truncating='post', value=0)
+                X5 = pad_sequences(X5, maxlen=MAXLEN, dtype='int32', padding='pre', truncating='post', value=0)
                 Y = np.array(Y)
 
-                datum = [[X0, X1, X2, X3, X4], Y]
+                if test_data:
+                    datum = [[X0, X1, X2, X3, X4, X5], Y, index_map]
+                else:
+                    datum = [[X0, X1, X2, X3, X4, X5], Y]
 
                 if negative_ratio is not None: # perform downsampling
                     neg_case_indexes = np.where(Y == 0)[0]
@@ -279,15 +301,125 @@ class DataGen(object):
                 yield data_q
                 break
 
+    def generate_triad_input(self, file_batch=100, looping=True, test_data=False):
+        """Generate triad input
+         """
+        doc_ids = self.df.doc_id.unique()
+        data_q = deque()
+        if test_data:
+            file_batch = 1  # yield data from one file each time
+        while True:
+            # if not test_data:
+            np.random.shuffle(doc_ids)  # Do this to test data too, to balance workload of subprocesses
+            for doc_id in doc_ids:
+                index_map = {}
+                # print("Generating data for %s" % doc_id)
+                doc_df = self.df.loc[self.df.doc_id == doc_id]
+                doc_coref_entities = get_entities(doc_df)
+
+                # get entity list
+                entities = []
+                locations = None
+                for coref_id in doc_coref_entities:
+                    for start_loc, end_loc in zip(doc_coref_entities[coref_id]['start'],
+                                                  doc_coref_entities[coref_id]['end']):
+                        entity = Entity(coref_id, doc_df, start_loc, end_loc)
+                        order, locations = entity.get_order(doc_coref_entities, locations=locations)
+                        entities.append((order, entity))
+
+                if not entities:
+                    continue
+                entities = [e[1] for e in sorted(entities, key=lambda x: x[0])]  # sorted according to order
+                N = len(entities)
+                if N < 2:
+                    print("Only one entity in %s" % doc_id)
+                    continue
+                elif N < 3 :
+                    entities.append(entities[0])  # expand a dyad to a triad
+                    N += 1
+
+                triad_indexes = combinations(range(N), 3)
+
+                X = [[] for _ in range(12)]
+                Y = []
+                index = 0
+                for a, b, c in triad_indexes:
+                    triad = (entities[a], entities[b], entities[c])
+                    distances = DataGen.get_triad_distances(triad)
+                    if max(distances) <= MAX_DISTANCE:
+
+                        speaker_identities = [int(triad[0].speaker == triad[1].speaker),
+                                              int(triad[1].speaker == triad[2].speaker),
+                                              int(triad[2].speaker == triad[0].speaker)]
+
+
+                        word_indexes = [self.get_word_indexes(triad[0].context_words),
+                                        self.get_word_indexes(triad[1].context_words),
+                                        self.get_word_indexes(triad[2].context_words)]
+
+                        pos_indexes = [self.get_pos_indexes(triad[0].context_pos),
+                                       self.get_pos_indexes(triad[1].context_pos),
+                                       self.get_pos_indexes(triad[2].context_pos)]
+
+                        X_triad = distances + speaker_identities + word_indexes + pos_indexes
+                        for i in range(12):
+                            X[i].append(X_triad[i])
+                        y_triad = [int(triad[0].coref_id == triad[1].coref_id),
+                             int(triad[1].coref_id == triad[2].coref_id),
+                             int(triad[2].coref_id == triad[0].coref_id)]
+                        Y.append(np.array(y_triad))
+
+                        if test_data:
+                            index_map[(doc_id,
+                                       (triad[0].start_loc, triad[0].end_loc),
+                                       (triad[1].start_loc, triad[1].end_loc),
+                                       (triad[2].start_loc, triad[2].end_loc))] = index
+                            index += 1
+
+                for i in range(6):  # distance and speaker
+                    X[i] = np.array(X[i])
+                    X[i] = np.expand_dims(X[i], axis=-1)
+
+                for i in range(6, 12):  # word and pos tag indexes
+                    X[i] = pad_sequences(X[i], maxlen=MAXLEN, dtype='int32', padding='pre', truncating='post', value=0)
+
+                Y = np.array(Y)
+
+                if test_data:
+                    datum = [X, Y, index_map]
+                else:
+                    datum = [X, Y]
+
+                data_q.append(datum)
+                if looping and len(data_q) == file_batch:
+                    yield data_q
+                    data_q = deque()
+
+            if not looping:  # yield the whole data set, and break
+                yield data_q
+                break
+
+    @staticmethod
+    def get_triad_distances(triad):
+        d0 = abs(triad[0].order - triad[1].order)
+        d1 = abs(triad[1].order - triad[2].order)
+        d2 = abs(triad[2].order - triad[0].order)
+        return [d0, d1, d2]
+
+    def get_word_indexes(self, word_list):
+        return [self.word_indexes[word] if word in self.word_indexes else self.word_indexes['UKN'] for word in word_list]
+
+    def get_pos_indexes(self, pos_list):
+        return [self.pos_tags.index(pos) + 1 if pos in self.pos_tags else self.pos_tags.index('UKN') for pos in pos_list]
+
+
     def get_embedding_matrix(self, word_vectors=None):
         if word_vectors is None:
             print('Loading word embeddings...')
             glove_path = os.environ["TEA_PATH"] + 'embeddings/glove.840B.300d.txt'
             word_vectors = build_vocab(self.df.word.unique(), glove_path, K=200000)
             word_vectors['_START_'] = np.ones(EMBEDDING_DIM)
-            # word_vectors['_START_POS_'] = np.ones(EMBEDDING_DIM)
             word_vectors['_END_'] = - np.ones(EMBEDDING_DIM)
-            # word_vectors['_END_POS_'] = - np.ones(EMBEDDING_DIM)
             word_vectors['UKN'] = np.random.uniform(-0.5, 0.5, EMBEDDING_DIM)
 
         word_indexes = {}
@@ -311,6 +443,9 @@ class DataGen(object):
 def slice_data(data, group_size):
     """Slice data to equal size"""
     X, y = data
+    if len(y.shape) == 1:
+        y = np.expand_dims(y, axis=-1)  # make y 2D (group, 1)
+
     if group_size == 0 or group_size is None: # special case, only one chunk
         yield X, y
     else:
@@ -332,7 +467,7 @@ def slice_data(data, group_size):
             y_out = y[indexes]
             yield X_out, y_out
 
-def group_data(data, group_size):
+def group_data(data, group_size, batch_size=None):
     X_out = None
     y_out = None
     for slice in slice_data(data, group_size):
@@ -345,5 +480,19 @@ def group_data(data, group_size):
         else:
             X_out = [np.concatenate((X_out[i], X[i]), axis=0) for i in range(len(X))]
             y_out = np.concatenate((y_out, y), axis=0)
-    # make y 3D (batch, group, 1)
-    return X_out, np.expand_dims(y_out, axis=-1)
+
+        if batch_size is not None and batch_size == y_out.shape[0]:
+            yield X_out, y_out
+            X_out = None
+            y_out = None
+
+    if batch_size is None: # a single batch for a file, whatever size
+        yield X_out, y_out
+
+    # make batch full
+    elif y_out is not None:
+        to_add = batch_size - y_out.shape[0]
+        for _ in range(to_add):
+            X_out = [np.concatenate([X_out[i], item]) for i, item in enumerate(X)]
+            y_out = np.concatenate([y_out, y])
+        yield X_out, y_out
