@@ -7,12 +7,72 @@ import re
 from collections import deque
 import numpy as np
 import time
-from keras.preprocessing.sequence import pad_sequences
+# from keras.preprocessing.sequence import pad_sequences
 import multiprocessing
 from itertools import combinations
 
-from word2vec import build_vocab
-from models import EMBEDDING_DIM, MAXLEN, MAX_DISTANCE
+from src.word2vec import build_vocab
+from src.models import EMBEDDING_DIM, MAXLEN, MAX_DISTANCE
+NEIGHBORHOOD = 3
+
+
+def pad_sequences(sequences, maxlen=None, dtype='int32',
+                  padding='pre', truncating='pre', value=0.):
+    """Pads sequences to the same length.
+
+    This is copied from keras.preprocessing.sequence.pad_sequences
+    We put it here so we do not have to import keras, which depends on tensorflow.
+
+    """
+    if not hasattr(sequences, '__len__'):
+        raise ValueError('`sequences` must be iterable.')
+    lengths = []
+    for x in sequences:
+        if not hasattr(x, '__len__'):
+            raise ValueError('`sequences` must be a list of iterables. '
+                             'Found non-iterable: ' + str(x))
+        lengths.append(len(x))
+
+    num_samples = len(sequences)
+    if maxlen is None:
+        maxlen = np.max(lengths)
+
+
+    # take the sample shape from the first non empty sequence
+    # checking for consistency in the main loop below.
+    sample_shape = tuple()
+    for s in sequences:
+        if len(s) > 0:
+            sample_shape = np.asarray(s).shape[1:]
+            break
+
+    x = (np.ones((num_samples, maxlen) + sample_shape) * value).astype(dtype)
+    for idx, s in enumerate(sequences):
+        if not len(s):
+            continue  # empty list/array was found
+        if truncating == 'pre':
+            trunc = s[-maxlen:]
+        elif truncating == 'post':
+            trunc = s[:maxlen]
+        else:
+            raise ValueError('Truncating type "%s" '
+                             'not understood' % truncating)
+
+        # check `trunc` has expected shape
+        trunc = np.asarray(trunc, dtype=dtype)
+        if trunc.shape[1:] != sample_shape:
+            raise ValueError('Shape of sample %s of sequence at position %s '
+                             'is different from expected shape %s' %
+                             (trunc.shape[1:], idx, sample_shape))
+
+        if padding == 'post':
+            x[idx, :len(trunc)] = trunc
+        elif padding == 'pre':
+            x[idx, -len(trunc):] = trunc
+        else:
+            raise ValueError('Padding type "%s" not understood' % padding)
+    return x
+
 
 def build_dataFrame(path, threads=4, suffix='gold_conll'):
     def worker(pid):
@@ -56,14 +116,17 @@ def build_dataFrame(path, threads=4, suffix='gold_conll'):
     time.sleep(1)
     df = None
 
-    while not data_queue.empty() or worker_alive(workers):
+    while df is None or len(df.doc_id.unique()) < n_files:
         item = data_queue.get()
         if df is None:
             df = item
         else:
             df = df.append(item)
         sys.stdout.write("Processed %d files from data queue\r" % len(df.doc_id.unique()))
+        # if not worker_alive(workers): break
 
+    time.sleep(1)
+    assert data_queue.empty()
     # Exit the completed processes
     print("\nFinished assembling data frame.")
     for p in workers:
@@ -301,17 +364,13 @@ class DataGen(object):
                 yield data_q
                 break
 
-    def generate_triad_input(self, file_batch=100, looping=True, test_data=False):
+
+    def generate_triad_input(self, file_batch=100, looping=True, test_data=False, threads=4):
         """Generate triad input
          """
-        doc_ids = self.df.doc_id.unique()
-        data_q = deque()
-        if test_data:
-            file_batch = 1  # yield data from one file each time
-        while True:
-            # if not test_data:
-            np.random.shuffle(doc_ids)  # Do this to test data too, to balance workload of subprocesses
-            for doc_id in doc_ids:
+        def worker(doc_id_q, out_q):
+            while True:
+                doc_id = doc_id_q.get()
                 index_map = {}
                 # print("Generating data for %s" % doc_id)
                 doc_df = self.df.loc[self.df.doc_id == doc_id]
@@ -334,7 +393,7 @@ class DataGen(object):
                 if N < 2:
                     print("Only one entity in %s" % doc_id)
                     continue
-                elif N < 3 :
+                elif N < 3:
                     entities.append(entities[0])  # expand a dyad to a triad
                     N += 1
 
@@ -346,12 +405,13 @@ class DataGen(object):
                 for a, b, c in triad_indexes:
                     triad = (entities[a], entities[b], entities[c])
                     distances = DataGen.get_triad_distances(triad)
-                    if max(distances) <= MAX_DISTANCE:
+                    diameter = max([abs(item) for item in distances])  # maximum distance between entities
+                    neighborhood = min([abs(item) for item in distances])  # minimum distance between entities
+                    if diameter <= MAX_DISTANCE and neighborhood <= NEIGHBORHOOD:
 
                         speaker_identities = [int(triad[0].speaker == triad[1].speaker),
                                               int(triad[1].speaker == triad[2].speaker),
                                               int(triad[2].speaker == triad[0].speaker)]
-
 
                         word_indexes = [self.get_word_indexes(triad[0].context_words),
                                         self.get_word_indexes(triad[1].context_words),
@@ -362,11 +422,14 @@ class DataGen(object):
                                        self.get_pos_indexes(triad[2].context_pos)]
 
                         X_triad = distances + speaker_identities + word_indexes + pos_indexes
+                        # locations = [triad[ind].order for ind in range(3)]
+                        # X_triad = locations + speaker_identities + word_indexes + pos_indexes
+
                         for i in range(12):
                             X[i].append(X_triad[i])
                         y_triad = [int(triad[0].coref_id == triad[1].coref_id),
-                             int(triad[1].coref_id == triad[2].coref_id),
-                             int(triad[2].coref_id == triad[0].coref_id)]
+                                   int(triad[1].coref_id == triad[2].coref_id),
+                                   int(triad[2].coref_id == triad[0].coref_id)]
                         Y.append(np.array(y_triad))
 
                         if test_data:
@@ -381,7 +444,8 @@ class DataGen(object):
                     X[i] = np.expand_dims(X[i], axis=-1)
 
                 for i in range(6, 12):  # word and pos tag indexes
-                    X[i] = pad_sequences(X[i], maxlen=MAXLEN, dtype='int32', padding='pre', truncating='post', value=0)
+                    X[i] = pad_sequences(X[i], maxlen=MAXLEN, dtype='int32', padding='pre', truncating='post',
+                                         value=0)
 
                 Y = np.array(Y)
 
@@ -390,20 +454,42 @@ class DataGen(object):
                 else:
                     datum = [X, Y]
 
-                data_q.append(datum)
-                if looping and len(data_q) == file_batch:
-                    yield data_q
-                    data_q = deque()
+                out_q.put(datum)
 
-            if not looping:  # yield the whole data set, and break
+        # main process
+        doc_ids = self.df.doc_id.unique()
+        data_q = deque()
+        if test_data:
+            file_batch = 1  # yield data from one file each time
+        out_q = multiprocessing.Queue(maxsize=200)
+        doc_id_q = multiprocessing.Queue()
+        workers = [multiprocessing.Process(target=worker, args=(doc_id_q, out_q)) for _ in range (threads)]
+        for worker in workers:
+            worker.daemon = True
+            worker.start()
+
+        while True:
+            if not test_data:
+                np.random.shuffle(doc_ids)
+            if doc_id_q.empty():
+                for doc_id in doc_ids:
+                    doc_id_q.put(doc_id)
+
+            datum = out_q.get()
+            data_q.append(datum)
+            if looping and len(data_q) == file_batch:
+                yield data_q
+                data_q = deque()
+
+            if not looping and len(data_q) == len(doc_ids):  # yield the whole data set, and break
                 yield data_q
                 break
 
     @staticmethod
     def get_triad_distances(triad):
-        d0 = abs(triad[0].order - triad[1].order)
-        d1 = abs(triad[1].order - triad[2].order)
-        d2 = abs(triad[2].order - triad[0].order)
+        d0 = triad[0].order - triad[1].order
+        d1 = triad[1].order - triad[2].order
+        d2 = triad[2].order - triad[0].order
         return [d0, d1, d2]
 
     def get_word_indexes(self, word_list):
@@ -412,11 +498,10 @@ class DataGen(object):
     def get_pos_indexes(self, pos_list):
         return [self.pos_tags.index(pos) + 1 if pos in self.pos_tags else self.pos_tags.index('UKN') for pos in pos_list]
 
-
     def get_embedding_matrix(self, word_vectors=None):
         if word_vectors is None:
             print('Loading word embeddings...')
-            glove_path = os.environ["TEA_PATH"] + 'embeddings/glove.840B.300d.txt'
+            glove_path = os.environ['HOME'] + '/projects/embeddings/glove.840B.300d.txt'
             word_vectors = build_vocab(self.df.word.unique(), glove_path, K=200000)
             word_vectors['_START_'] = np.ones(EMBEDDING_DIM)
             word_vectors['_END_'] = - np.ones(EMBEDDING_DIM)
@@ -450,7 +535,7 @@ def slice_data(data, group_size):
         yield X, y
     else:
         n = len(y)
-        n_chunks = n / group_size
+        n_chunks = int(n / group_size)
 
         if n_chunks > 0:
             for m in range(n_chunks):
@@ -486,7 +571,7 @@ def group_data(data, group_size, batch_size=None):
             X_out = None
             y_out = None
 
-    if batch_size is None: # a single batch for a file, whatever size
+    if batch_size is None: # a yield for a file, whatever size
         yield X_out, y_out
 
     # make batch full

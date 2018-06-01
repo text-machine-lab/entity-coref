@@ -1,6 +1,5 @@
 from __future__ import print_function
 import numpy as np
-import nltk
 
 
 def load_glove(gloveFile):
@@ -17,19 +16,6 @@ def load_glove(gloveFile):
 
 # The folliwing functions are adapted from https://github.com/facebookresearch/InferSent/blob/master/data.py
 
-def get_word_dict(sentences):
-    # create vocab of words
-    word_dict = {}
-    for sent in sentences:
-        for word in nltk.word_tokenize(sent):  # original version uses split()
-            if word not in word_dict:
-                word_dict[word] = ''
-    word_dict['<s>'] = ''
-    word_dict['</s>'] = ''
-    word_dict['<p>'] = ''
-    return word_dict
-
-
 def get_glove(word_dict, glove_path):
     # create word_vec with glove vectors
     word_vec = {}
@@ -41,14 +27,6 @@ def get_glove(word_dict, glove_path):
     print('Found {0}(/{1}) words with glove vectors'.format(
                 len(word_vec), len(word_dict)))
     return word_vec
-
-
-def build_vocab_from_sentences(sentences, glove_path):
-    word_dict = get_word_dict(sentences)
-    word_vec = get_glove(word_dict, glove_path)
-    print('Vocab size : {0}'.format(len(word_vec)))
-    return word_vec
-
 
 def build_vocab_from_tokens(tokens, glove_path):
     """Build vocab from a list of tokens"""

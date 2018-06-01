@@ -10,9 +10,10 @@ import tensorflow as tf
 import keras
 from keras.models import load_model
 from keras.callbacks import TensorBoard
+import keras.backend as K
 
-from code.models import get_pre_ntm_model2, MAXLEN, get_combined_ntm_model, BATCH_SIZE
-from code.build_data import build_dataFrame, DataGen, group_data
+from src.models import get_pre_ntm_model2, MAXLEN, get_combined_ntm_model, BATCH_SIZE
+from src.build_data import build_dataFrame, DataGen, group_data
 from predict import Evaluator
 
 
@@ -74,12 +75,13 @@ def main():
     group_size = 40
 
     if args.load_model:
-        model = load_model(os.path.join(args.model_destination, 'final_model.h5'))
+        model = load_model(os.path.join(args.model_destination, 'model.h5'))
+        print("loaded trained model...")
     elif args.no_ntm:
-        model = get_pre_ntm_model2(group_size=group_size, input_dropout=0.3, max_len=MAXLEN,
+        model = get_pre_ntm_model2(group_size=group_size, input_dropout=0.5, max_len=MAXLEN,
                                   embedding_matrix=train_gen.embedding_matrix, pos_size=len(train_gen.pos_tags))
     else:
-        model = get_combined_ntm_model(batch_size=BATCH_SIZE, group_size=group_size, input_dropout=0.3, max_len=MAXLEN, embedding_matrix=train_gen.embedding_matrix,
+        model = get_combined_ntm_model(batch_size=BATCH_SIZE, group_size=group_size, input_dropout=0.5, max_len=MAXLEN, embedding_matrix=train_gen.embedding_matrix,
                                        pos_size=len(train_gen.pos_tags), m_depth=256, n_slots=128, ntm_output_dim=128,
                                        shift_range=3, read_heads=1, write_heads=1)
 
@@ -145,6 +147,11 @@ def main():
         #     val_acc = evaluator.fast_eval()
         #     sys.stdout.write("epoch %d after training file %d/%d--- -%ds - loss : %.4f - acc : %.4f - val_acc : %.4f\r" % (
         #         epoch + 1, n + 1, n_training_files, int(time.time() - start), loss, acc, val_acc))
+        if epoch > 99:
+            K.set_value(model.optimizer.lr, 0.0005)
+        if epoch > 199:
+            K.set_value(model.optimizer.lr, 0.0001)
+
         sys.stdout.write("\n")
         training_history.append({'categorical_accuracy': acc, 'loss': loss})
         if epoch > 0 and epoch % 10 == 0:

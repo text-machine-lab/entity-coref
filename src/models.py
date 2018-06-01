@@ -3,18 +3,21 @@ import os
 import sys
 import numpy as np
 # np.random.seed(1337)
-from scipy.cluster.hierarchy import fclusterdata
 
 import keras
 from keras.models import Model, Sequential, load_model
 from keras.regularizers import l1_l2, l2
-from keras.layers import Embedding, Reshape, LSTM, Dense, concatenate, average, add, MaxPooling1D, TimeDistributed, Flatten, Lambda, Input, Dropout, Bidirectional, add
+from keras.layers import Embedding, Reshape, LSTM, Dense, concatenate, average, add, MaxPooling1D, TimeDistributed, Flatten, Lambda, Input, Dropout, Bidirectional, add, Masking
 from keras.optimizers import Adam, RMSprop, SGD
 import keras.backend as K
-from ntm import SimpleNTM as NTM
+from src.ntm import SimpleNTM as NTM
+
+import scipy.spatial.distance as distance
+from scipy.cluster.hierarchy import linkage, inconsistent, fcluster
+# from scipy.cluster.hierarchy import fclusterdata
 
 EMBEDDING_DIM = 300
-MAX_DISTANCE = 5
+MAX_DISTANCE = 15 #40
 MAXLEN = 10 + 10 # max length of entities allowed
 BATCH_SIZE = 5
 
@@ -108,7 +111,7 @@ def get_pre_ntm_model2(group_size=None, input_dropout=0.3, max_len=MAXLEN, embed
 
     model = Model(inputs=[input_distance, input_speaker, input_word_current, input_pos_current, input_word_prev, input_pos_prev], outputs=[outlayer])
     # model.summary()
-    model.compile(loss='binary_crossentropy', optimizer=Adam(lr=0.0001), metrics=['accuracy'])
+    model.compile(loss='binary_crossentropy', optimizer=Adam(lr=0.0005), metrics=['accuracy'])
 
     return model
 
@@ -118,7 +121,7 @@ def get_combined_ntm_model(batch_size=5, group_size=40, input_dropout=0.3, max_l
     # Shared embedding layer
     print("embedding matrix", embedding_matrix.shape)
     word_embedding = Embedding(len(embedding_matrix), EMBEDDING_DIM, mask_zero=False, weights=[embedding_matrix], trainable=True)
-    pos_embedding = Embedding(pos_size+1, 10, mask_zero=False, trainable=True) # index 0 reserved for mask
+    pos_embedding = Embedding(pos_size+1, pos_size+1, embeddings_initializer='identity', mask_zero=False, trainable=True) # index 0 reserved for mask
 
     input_distance = Input(shape=(group_size, 1))
     input_speaker = Input(shape=(group_size, 1))
@@ -178,56 +181,82 @@ def get_combined_ntm_model(batch_size=5, group_size=40, input_dropout=0.3, max_l
 def get_triad_model(group_size=None, input_dropout=0.3, max_len=MAXLEN, embedding_matrix=None, pos_size=49, **kwargs):
     """group_size here is the # of pairs in a group"""
 
-    # Shared layers
     WordEmbedding = Embedding(len(embedding_matrix), EMBEDDING_DIM, mask_zero=False, weights=[embedding_matrix], trainable=True)
-    PosEmbedding = Embedding(pos_size+1, 10, mask_zero=False, trainable=True) # index 0 reserved for mask
-    WordLSTM = TimeDistributed(Bidirectional(LSTM(128, return_sequences=False, activation='linear'), merge_mode='ave'))
-    PosLSTM = TimeDistributed(Bidirectional(LSTM(16, return_sequences=False, activation='linear'), merge_mode='ave'))
+    PosEmbedding = Embedding(pos_size+1, pos_size+1, embeddings_initializer='identity', mask_zero=False, trainable=True) # index 0 reserved for mask
+    # WordLSTM = TimeDistributed(Bidirectional(LSTM(128, return_sequences=True, activation='linear'), merge_mode='ave'))
+    # WordMaxPool = TimeDistributed(MaxPooling1D(pool_size=max_len, padding='same'))
+    WordLSTM = Bidirectional(LSTM(128, return_sequences=True, activation='linear'), merge_mode='ave')
+    WordMaxPool = MaxPooling1D(pool_size=max_len, padding='same')
+    WordReduceDim = Lambda(lambda x: K.max(x, axis=-2))
+    # PosLSTM = TimeDistributed(Bidirectional(LSTM(16, return_sequences=True, activation='linear'), merge_mode='ave'))
+    # PosMaxPool = TimeDistributed(MaxPooling1D(pool_size=max_len, padding='same'))
+    PosLSTM = Bidirectional(LSTM(16, return_sequences=True, activation='linear'), merge_mode='ave')
+    PosMaxPool = MaxPooling1D(pool_size=max_len, padding='same')
+    PosReduceDim = Lambda(lambda x: K.max(x, axis=-2))
+
     Hidden_1 = Dense(128, activation='relu')
     Hidden_2 = Dense(64, activation='relu')
     Decoder = Dense(32, activation='relu', name='decoder')
 
-    input_distance0 = Input(shape=(group_size, 1))
-    input_distance1 = Input(shape=(group_size, 1))
-    input_distance2 = Input(shape=(group_size, 1))
+    # input_distance0 = Input(shape=(group_size, 1))
+    # input_distance1 = Input(shape=(group_size, 1))
+    # input_distance2 = Input(shape=(group_size, 1))
+    input_distance0 = Input(shape=(1,))
+    input_distance1 = Input(shape=(1,))
+    input_distance2 = Input(shape=(1,))
     input_distances = [input_distance0, input_distance1, input_distance2]
 
-    input_speaker0 = Input(shape=(group_size, 1))
-    input_speaker1 = Input(shape=(group_size, 1))
-    input_speaker2 = Input(shape=(group_size, 1))
+    # input_speaker0 = Input(shape=(group_size, 1))
+    # input_speaker1 = Input(shape=(group_size, 1))
+    # input_speaker2 = Input(shape=(group_size, 1))
+    input_speaker0 = Input(shape=(1,))
+    input_speaker1 = Input(shape=(1,))
+    input_speaker2 = Input(shape=(1,))
     input_speakers = [input_speaker0, input_speaker1, input_speaker2]
 
-    input_word_0 = Input(shape=(group_size, max_len))
+    input_word_0 = Input(shape=(max_len,))
     word_emb_0 = WordEmbedding(input_word_0)
     word_emb_0 = Dropout(input_dropout)(word_emb_0)
     word_lstm_0 = WordLSTM(word_emb_0)
+    word_lstm_0 = WordMaxPool(word_lstm_0)
+    word_lstm_0 = WordReduceDim(word_lstm_0)
 
-    input_word_1 = Input(shape=(group_size, max_len))
+    input_word_1 = Input(shape=(max_len,))
     word_emb_1 = WordEmbedding(input_word_1)
     word_emb_1 = Dropout(input_dropout)(word_emb_1)
     word_lstm_1 = WordLSTM(word_emb_1)
+    word_lstm_1 = WordMaxPool(word_lstm_1)
+    word_lstm_1 = WordReduceDim(word_lstm_1)
 
-    input_word_2 = Input(shape=(group_size, max_len))
+    input_word_2 = Input(shape=(max_len,))
     word_emb_2 = WordEmbedding(input_word_2)
     word_emb_2 = Dropout(input_dropout)(word_emb_2)
     word_lstm_2 = WordLSTM(word_emb_2)
+    word_lstm_2 = WordMaxPool(word_lstm_2)
+    word_lstm_2 = WordReduceDim(word_lstm_2)
 
     input_words = [input_word_0, input_word_1, input_word_2]
 
-    input_pos_0 = Input(shape=(group_size, max_len))
+    input_pos_0 = Input(shape=(max_len,))
     pos_emb_0 = PosEmbedding(input_pos_0)
     pos_emb_0 = Dropout(input_dropout)(pos_emb_0)
     pos_lstm_0 = PosLSTM(pos_emb_0)
+    pos_lstm_0 = PosMaxPool(pos_lstm_0)
+    pos_lstm_0 = PosReduceDim(pos_lstm_0)
 
-    input_pos_1 = Input(shape=(group_size, max_len))
+    input_pos_1 = Input(shape=(max_len,))
     pos_emb_1 = PosEmbedding(input_pos_1)
     pos_emb_1 = Dropout(input_dropout)(pos_emb_1)
     pos_lstm_1 = PosLSTM(pos_emb_1)
+    pos_lstm_1 = PosMaxPool(pos_lstm_1)
+    pos_lstm_1 = PosReduceDim(pos_lstm_1)
 
-    input_pos_2 = Input(shape=(group_size, max_len))
+    input_pos_2 = Input(shape=(max_len,))
     pos_emb_2 = PosEmbedding(input_pos_2)
     pos_emb_2 = Dropout(input_dropout)(pos_emb_2)
     pos_lstm_2 = PosLSTM(pos_emb_2)
+    pos_lstm_2 = PosMaxPool(pos_lstm_2)
+    pos_lstm_2 = PosReduceDim(pos_lstm_2)
 
     input_pos_tags = [input_pos_0, input_pos_1, input_pos_2]
 
@@ -269,17 +298,26 @@ def clustering(pair_results, binarize=False):
     def distance(e1, e2):
         e1 = tuple(e1.astype(int))
         e2 = tuple(e2.astype(int))
+        if e1 == e2:
+            return 1.0  # This is the minumum distance
         if (e1, e2) in pair_results:
-            dist = 1 - pair_results[(e1, e2)] #+ 1e-4
+            similarity = max(pair_results[(e1, e2)], 1e-3)
+            # dist = 1 - pair_results[(e1, e2)] #+ 1e-4
+            dist = min(1.0 / (similarity), 10.0)
+            # dist = (10 * (1 - pair_results[(e1, e2)])) ** 2
         else:
-            dist = 0.9
+            # dist = 0.9
+            dist = 10.0
         if binarize:
             dist = np.round(dist)
 
         return dist
 
     # distance has no direction
-    pairs = pair_results.keys()
+    if sys.version_info[0] == 3:
+        pairs = list(pair_results.keys())
+    else:
+        pairs = pair_results.keys()
     for key in pairs:
         pair_results[(key[1], key[0])] = pair_results[key]
 
@@ -288,5 +326,28 @@ def clustering(pair_results, binarize=False):
     x.sort(key=lambda x: x[0])
     x = np.array(x)
 
-    clusters = fclusterdata(x, 1.0, criterion='inconsistent', metric=distance, depth=2, method='single')
-    return x, clusters
+    clusters, Z = fclusterdata(x, 1.7, criterion='distance', metric=distance, depth=2, method='single')
+    return x, clusters, Z
+
+
+def fclusterdata(X, t, criterion='inconsistent',
+                     metric='euclidean', depth=2, method='single', R=None):
+    """
+    This is adapted from scipy fclusterdata.
+    https://github.com/scipy/scipy/blob/v1.0.0/scipy/cluster/hierarchy.py#L1809-L1878
+    """
+    X = np.asarray(X, order='c', dtype=np.double)
+
+    if type(X) != np.ndarray or len(X.shape) != 2:
+        print(type(X), X.shape)
+        raise TypeError('The observation matrix X must be an n by m numpy '
+                        'array.')
+
+    Y = distance.pdist(X, metric=metric)
+    Z = linkage(Y, method=method)
+    if R is None:
+        R = inconsistent(Z, d=depth)
+    else:
+        R = np.asarray(R, order='c')
+    T = fcluster(Z, criterion=criterion, depth=depth, R=R, t=t)
+    return T, Z
