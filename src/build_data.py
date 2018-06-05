@@ -7,14 +7,16 @@ import re
 from collections import deque
 import numpy as np
 import time
-# from keras.preprocessing.sequence import pad_sequences
 import multiprocessing
 from itertools import combinations
 
 from src.word2vec import build_vocab
-from src.models import EMBEDDING_DIM, MAXLEN, MAX_DISTANCE
-NEIGHBORHOOD = 3
 
+EMBEDDING_DIM = 300
+NEIGHBORHOOD = 3  # minimum distance between entities
+MAX_DISTANCE = 15  #40
+MAXLEN = 10 + 10  # max length of entities allowed (target length + context length)
+BATCH_SIZE = 5
 
 def pad_sequences(sequences, maxlen=None, dtype='int32',
                   padding='pre', truncating='pre', value=0.):
