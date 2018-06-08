@@ -3,6 +3,7 @@ import torch.autograd as autograd
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
+from torch.nn.utils import weight_norm
 import time
 import os
 import sys
@@ -11,6 +12,7 @@ import pickle
 
 from src.build_data import build_dataFrame, DataGen, slice_data, EMBEDDING_DIM
 from src.evaluator import TriadEvaluator
+
 
 class CorefTagger(nn.Module):
     def __init__(self, vocab_size, pos_size, word_embeddings=None):
@@ -28,8 +30,8 @@ class CorefTagger(nn.Module):
         self.PosEmbedding.weight = nn.Parameter(torch.eye(self.pos_size + 1).type(torch.cuda.FloatTensor))
         self.PosLSTM = nn.LSTM(self.pos_size + 1, 8, num_layers=1, batch_first=True, bidirectional=True)
 
-        self.PairHidden_1 = nn.Linear(2*(256+16)+1+1, 256)
-        self.PairHidden_2 = nn.Linear(256, 128)
+        self.PairHidden_1 = weight_norm(nn.Linear(2*(256+16)+1+1, 256), name='weight')
+        self.PairHidden_2 = weight_norm(nn.Linear(256, 128), name='weight')
         self.Context = nn.Linear(128*2, 128)
         self.Decoder = nn.Linear(256, 64)
         self.Harmonize = nn.Linear(64*3, 8)
@@ -45,7 +47,6 @@ class CorefTagger(nn.Module):
 
         self.optimizer = optim.SGD(self.parameters(), lr=0.01, weight_decay=1e-4)
         self.init_label_constraint()
-        # self.c = nn.Parameter(torch.cuda.FloatTensor([1.0]))  # loss weight
 
     def init_label_constraint(self):
         print("Training label constraint model...")
@@ -54,7 +55,7 @@ class CorefTagger(nn.Module):
         y = autograd.Variable(torch.cuda.FloatTensor([[0], [0], [0], [1], [0], [1], [1], [0]]))
 
         loss_fn = nn.BCELoss()
-        optimizer = optim.SGD(self.label_constraint.parameters(), lr=0.01, weight_decay=1e-4)
+        optimizer = optim.SGD(self.label_constraint.parameters(), lr=0.01, momentum=0.9, weight_decay=1e-4)
         while True:
             for e in range(2000):
                 pred = self.label_constraint(X)
@@ -77,17 +78,17 @@ class CorefTagger(nn.Module):
 
     def process_words(self, input_words):
         word_emb_0 = self.WordEmbedding(input_words[0])
-        word_emb_0 = F.dropout(word_emb_0, p=0.5)
+        word_emb_0 = F.dropout(word_emb_0, p=0.3)
         word_lstm_0, _ = self.WordLSTM(word_emb_0)  # (batch, seq, feature)
         word_lstm_0, _ = torch.max(word_lstm_0, dim=1, keepdim=False)  # (batch, feature)
 
         word_emb_1 = self.WordEmbedding(input_words[1])
-        word_emb_1 = F.dropout(word_emb_1, p=0.5)
+        word_emb_1 = F.dropout(word_emb_1, p=0.3)
         word_lstm_1, _ = self.WordLSTM(word_emb_1)  # (batch, seq, feature)
         word_lstm_1, _ = torch.max(word_lstm_1, dim=1, keepdim=False)  # (batch, feature)
 
         word_emb_2 = self.WordEmbedding(input_words[2])
-        word_emb_2 = F.dropout(word_emb_2, p=0.5)
+        word_emb_2 = F.dropout(word_emb_2, p=0.3)
         word_lstm_2, _ = self.WordLSTM(word_emb_2)  # (batch, seq, feature)
         word_lstm_2, _ = torch.max(word_lstm_2, dim=1, keepdim=False)  # (batch, feature)
 
@@ -143,20 +144,21 @@ class CorefTagger(nn.Module):
 
         return output
 
+    @staticmethod
+    def sharpen(x, alpha=2.0):
+        return F.softmax(x**alpha)
+
     def criterion(self, pred, truth):
         individual_loss = nn.BCELoss()(pred, truth)
 
-        transitivity_loss = 5 * self.label_constraint(pred).sum() / len(pred)
-        # with torch.no_grad():
-        #     true_score = self.label_constraint(truth)
-        # transitivity_loss = nn.BCELoss()(label_score, true_score)
+        transitivity_loss = 5 * self.label_constraint(CorefTagger.sharpen(pred)).sum() / len(pred)
 
         return individual_loss, transitivity_loss
 
     def fit(self, X, y):
         pred = self.forward(X)
         individual_loss, transitivity_loss = self.criterion(pred, y)
-        loss = individual_loss + transitivity_loss
+        loss = individual_loss # + transitivity_loss
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
@@ -188,7 +190,7 @@ def train(**kwargs):
     epochs = kwargs['epochs']
     load_model = kwargs['load_model']
 
-    group_size = 200
+    group_size = 100
     train_input_gen = train_gen.generate_triad_input(file_batch=50, threads=3)
 
     assert torch.cuda.is_available()
@@ -275,10 +277,10 @@ def train(**kwargs):
                 # print("\nlabel constraint factor:", model.c)
                 print(eval_results)
 
-            if epoch + 1 == 150:
+            if epoch + 1 == 200:
                 for g in optimizer.param_groups:
                     g['lr'] = 0.005
-            if epoch + 1 == 300:
+            if epoch + 1 == 400:
                 for g in optimizer.param_groups:
                     g['lr'] = 0.001
 

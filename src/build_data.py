@@ -255,11 +255,17 @@ class DataGen(object):
         if not self.pos_tags:
             self.get_pos_tags()
 
-    def generate_input(self, negative_ratio=0.8, file_batch=100, looping=True, test_data=False):
+    def generate_input(self, negative_ratio=0.8, file_batch=100, looping=True, test_data=False, **kwargs):
         """Generate pairwise input
            negative_ratio = # negative / # total
+           file_batch: # files to process and yield each time
         """
         assert negative_ratio is None or negative_ratio < 1
+        if 'max_distance' in kwargs:
+            max_distance = kwargs['max_distance']
+        else:
+            max_distance = MAX_DISTANCE
+
         doc_ids = self.df.doc_id.unique()
         data_q = deque()
         if test_data:
@@ -298,7 +304,7 @@ class DataGen(object):
                 for i, entity in enumerate(entities):
                     for j in range(0, i):
                         distance = entity.order - entities[j].order
-                        if distance > MAX_DISTANCE:
+                        if distance > max_distance:
                             continue
                         if entity.speaker == entities[j].speaker:
                             same_speaker = 1
@@ -367,9 +373,15 @@ class DataGen(object):
                 break
 
 
-    def generate_triad_input(self, file_batch=100, looping=True, test_data=False, threads=4):
+    def generate_triad_input(self, file_batch=100, looping=True, test_data=False, threads=4, **kwargs):
         """Generate triad input
+           file_batch: # files to process and yield each time
          """
+        if 'max_distance' in kwargs:
+            max_distance = kwargs['max_distance']
+        else:
+            max_distance = MAX_DISTANCE
+        print("max distance: %d" % max_distance)
         def worker(doc_id_q, out_q):
             while True:
                 doc_id = doc_id_q.get()
@@ -409,7 +421,7 @@ class DataGen(object):
                     distances = DataGen.get_triad_distances(triad)
                     diameter = max([abs(item) for item in distances])  # maximum distance between entities
                     neighborhood = min([abs(item) for item in distances])  # minimum distance between entities
-                    if diameter <= MAX_DISTANCE and neighborhood <= NEIGHBORHOOD:
+                    if diameter <= max_distance and neighborhood <= NEIGHBORHOOD:
 
                         speaker_identities = [int(triad[0].speaker == triad[1].speaker),
                                               int(triad[1].speaker == triad[2].speaker),
@@ -528,7 +540,9 @@ class DataGen(object):
         self.pos_tags = np.append(all_pos_tags, ['_START_POS_', '_END_POS_', 'UKN']).tolist()
 
 def slice_data(data, group_size):
-    """Slice data to equal size"""
+    """Slice data to equal size
+        group_size: # instances to yield each time. If 0 or None, yield all
+    """
     X, y = data
     if len(y.shape) == 1:
         y = np.expand_dims(y, axis=-1)  # make y 2D (group, 1)

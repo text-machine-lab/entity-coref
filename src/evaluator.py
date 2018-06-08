@@ -1,15 +1,11 @@
-import argparse
-import glob
 import multiprocessing
 import os
-import pickle
-import shutil
 import sys
 from collections import defaultdict
 
 import numpy as np
 from sklearn.metrics import classification_report
-from src.models import clustering
+from src.clustering import clustering
 
 from src.build_data import group_data, slice_data, BATCH_SIZE
 
@@ -171,7 +167,7 @@ class TriadEvaluator(object):
             pair_results_mean = {}
             for key, value in pair_results.items():
                 # mean_value = TriadEvaluator.nonlinear_mean(value)
-                mean_value = TriadEvaluator.top_n_mean(value, 1)
+                mean_value = TriadEvaluator.top_n_mean(value, 3)
                 pair_results_mean[key] = mean_value
                 all_pairs_pred.append(mean_value)
                 all_pairs_true.append(pair_true[key])
