@@ -34,8 +34,9 @@ class CorefTagger(nn.Module):
         self.PairHidden_2 = weight_norm(nn.Linear(256, 128), name='weight')
         self.Context = nn.Linear(128*2, 128)
         self.Decoder = nn.Linear(256, 64)
-        self.Harmonize = nn.Linear(64*3, 8)
-        self.Out = nn.Linear(8, 3)
+        # self.Harmonize = nn.Linear(64*3, 8)
+        # self.Out = nn.Linear(8, 3)
+        self.Out = nn.Linear(64, 1)
 
         self.label_constraint = torch.nn.Sequential(
             torch.nn.Linear(3,16),
@@ -139,8 +140,12 @@ class CorefTagger(nn.Module):
         decoder0 = F.tanh(self.Decoder(torch.cat([hidden01_2, context], -1)))
         decoder1 = F.tanh(self.Decoder(torch.cat([hidden12_2, context], -1)))
         decoder2 = F.tanh(self.Decoder(torch.cat([hidden20_2, context], -1)))
-        harmonized = F.tanh(self.Harmonize(torch.cat([decoder0, decoder1, decoder2], -1)))
-        output = F.sigmoid(self.Out(harmonized))
+        # harmonized = F.tanh(self.Harmonize(torch.cat([decoder0, decoder1, decoder2], -1)))
+        # output = F.sigmoid(self.Out(harmonized))
+        output0 = F.sigmoid(self.Out(decoder0))
+        output1 = F.sigmoid(self.Out(decoder1))
+        output2 = F.sigmoid(self.Out(decoder2))
+        output = torch.cat([output0, output1, output2], -1)
 
         return output
 
@@ -148,29 +153,55 @@ class CorefTagger(nn.Module):
     def sharpen(x, alpha=2.0):
         return F.softmax(x**alpha)
 
+    # def criterion(self, pred, truth):
+    #     individual_loss = nn.BCELoss()(pred, truth)
+    #
+    #     transitivity_loss = 5 * self.label_constraint(CorefTagger.sharpen(pred)).sum() / len(pred)
+    #
+    #     return individual_loss, transitivity_loss
+
     def criterion(self, pred, truth):
         individual_loss = nn.BCELoss()(pred, truth)
 
-        transitivity_loss = 5 * self.label_constraint(CorefTagger.sharpen(pred)).sum() / len(pred)
+        return individual_loss
 
-        return individual_loss, transitivity_loss
+    # def fit(self, X, y):
+    #     pred = self.forward(X)
+    #     individual_loss, transitivity_loss = self.criterion(pred, y)
+    #     loss = individual_loss # + transitivity_loss
+    #     self.optimizer.zero_grad()
+    #     loss.backward()
+    #     self.optimizer.step()
+    #     acc = (pred.round() == y).sum().type(torch.cuda.FloatTensor) / (len(y)*3)
+    #
+    #     return individual_loss.data.item(), transitivity_loss.data.item(), acc
 
     def fit(self, X, y):
         pred = self.forward(X)
-        individual_loss, transitivity_loss = self.criterion(pred, y)
-        loss = individual_loss # + transitivity_loss
+        loss0 = self.criterion(pred[0], y[0])
+        loss1 = self.criterion(pred[1], y[1])
+        loss2 = self.criterion(pred[2], y[2])
+
         self.optimizer.zero_grad()
-        loss.backward()
+        # backpropagate individually, because they are decoupled
+        loss0.backward(retain_graph=True)
+        loss1.backward(retain_graph=True)
+        loss2.backward(retain_graph=True)
         self.optimizer.step()
+
         acc = (pred.round() == y).sum().type(torch.cuda.FloatTensor) / (len(y)*3)
+
+        individual_loss = loss0 + loss1 + loss2
+        transitivity_loss = 5 * self.label_constraint(CorefTagger.sharpen(pred)).sum() / len(pred)
 
         return individual_loss.data.item(), transitivity_loss.data.item(), acc
 
     def evaluate(self, X, y):
         with torch.no_grad():
             pred = self.forward(X)
-            individual_loss, transitivity_loss = self.criterion(pred, y)
+            individual_loss = self.criterion(pred, y)
             acc = (pred.round() == y).sum().type(torch.cuda.FloatTensor) / (len(y) * 3)
+            transitivity_loss = 5 * self.label_constraint(CorefTagger.sharpen(pred)).sum() / len(pred)
 
         return individual_loss.data.item(), transitivity_loss.data.item(), acc
 
