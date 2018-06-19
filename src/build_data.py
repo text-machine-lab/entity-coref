@@ -503,7 +503,8 @@ class DataGen(object):
     def get_triad_distances(triad):
         d0 = triad[0].order - triad[1].order
         d1 = triad[1].order - triad[2].order
-        d2 = triad[2].order - triad[0].order
+        # d2 = triad[2].order - triad[0].order
+        d2 = triad[0].order - triad[2].order
         return [d0, d1, d2]
 
     def get_word_indexes(self, word_list):

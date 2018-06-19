@@ -34,9 +34,8 @@ class CorefTagger(nn.Module):
         self.PairHidden_2 = weight_norm(nn.Linear(256, 128), name='weight')
         self.Context = nn.Linear(128*2, 128)
         self.Decoder = nn.Linear(256, 64)
-        # self.Harmonize = nn.Linear(64*3, 8)
-        # self.Out = nn.Linear(8, 3)
-        self.Out = nn.Linear(64, 1)
+        self.Harmonize = nn.Linear(64*3, 16)
+        self.Out = nn.Linear(16, 3)
 
         self.label_constraint = torch.nn.Sequential(
             torch.nn.Linear(3,16),
@@ -46,7 +45,7 @@ class CorefTagger(nn.Module):
             torch.nn.Linear(8,1),
             torch.nn.Sigmoid()).cuda()
 
-        self.optimizer = optim.SGD(self.parameters(), lr=0.01, weight_decay=1e-4)
+        self.optimizer = optim.SGD(self.parameters(), lr=0.01, momentum=0.9, weight_decay=1e-4)
         self.init_label_constraint()
 
     def init_label_constraint(self):
@@ -130,7 +129,7 @@ class CorefTagger(nn.Module):
         hidden12_2 = F.relu(F.dropout(self.PairHidden_2(hidden12_1), p=0.3))
 
         concat20 = torch.cat(
-            [input_distances[2], input_speakers[2], word_lstms[2], pos_lstms[2], word_lstms[0], pos_lstms[0]], -1)
+            [input_distances[2], input_speakers[2], word_lstms[0], pos_lstms[0], word_lstms[2], pos_lstms[2]], -1)
         hidden20_1 = F.relu(F.dropout(self.PairHidden_1(concat20), p=0.3))
         hidden20_2 = F.relu(F.dropout(self.PairHidden_2(hidden20_1), p=0.3))
 
@@ -140,68 +139,38 @@ class CorefTagger(nn.Module):
         decoder0 = F.tanh(self.Decoder(torch.cat([hidden01_2, context], -1)))
         decoder1 = F.tanh(self.Decoder(torch.cat([hidden12_2, context], -1)))
         decoder2 = F.tanh(self.Decoder(torch.cat([hidden20_2, context], -1)))
-        # harmonized = F.tanh(self.Harmonize(torch.cat([decoder0, decoder1, decoder2], -1)))
-        # output = F.sigmoid(self.Out(harmonized))
-        output0 = F.sigmoid(self.Out(decoder0))
-        output1 = F.sigmoid(self.Out(decoder1))
-        output2 = F.sigmoid(self.Out(decoder2))
-        output = torch.cat([output0, output1, output2], -1)
+        harmonized = F.tanh(self.Harmonize(torch.cat([decoder0, decoder1, decoder2], -1)))
+        output = F.sigmoid(self.Out(harmonized))
 
         return output
 
     @staticmethod
-    def sharpen(x, alpha=2.0):
+    def sharpen(x, alpha=5.0):
         return F.softmax(x**alpha)
-
-    # def criterion(self, pred, truth):
-    #     individual_loss = nn.BCELoss()(pred, truth)
-    #
-    #     transitivity_loss = 5 * self.label_constraint(CorefTagger.sharpen(pred)).sum() / len(pred)
-    #
-    #     return individual_loss, transitivity_loss
 
     def criterion(self, pred, truth):
         individual_loss = nn.BCELoss()(pred, truth)
 
-        return individual_loss
+        transitivity_loss = 5 * self.label_constraint(CorefTagger.sharpen(pred)).sum() / len(pred)
 
-    # def fit(self, X, y):
-    #     pred = self.forward(X)
-    #     individual_loss, transitivity_loss = self.criterion(pred, y)
-    #     loss = individual_loss # + transitivity_loss
-    #     self.optimizer.zero_grad()
-    #     loss.backward()
-    #     self.optimizer.step()
-    #     acc = (pred.round() == y).sum().type(torch.cuda.FloatTensor) / (len(y)*3)
-    #
-    #     return individual_loss.data.item(), transitivity_loss.data.item(), acc
+        return individual_loss, transitivity_loss
 
     def fit(self, X, y):
         pred = self.forward(X)
-        loss0 = self.criterion(pred[0], y[0])
-        loss1 = self.criterion(pred[1], y[1])
-        loss2 = self.criterion(pred[2], y[2])
-
+        individual_loss, transitivity_loss = self.criterion(pred, y)
+        loss = individual_loss + transitivity_loss
         self.optimizer.zero_grad()
-        # backpropagate individually, because they are decoupled
-        loss0.backward(retain_graph=True)
-        loss1.backward(retain_graph=True)
-        loss2.backward(retain_graph=True)
+        loss.backward()
         self.optimizer.step()
-
         acc = (pred.round() == y).sum().type(torch.cuda.FloatTensor) / (len(y)*3)
-
-        individual_loss = loss0 + loss1 + loss2
-        transitivity_loss = 5 * self.label_constraint(CorefTagger.sharpen(pred)).sum() / len(pred)
 
         return individual_loss.data.item(), transitivity_loss.data.item(), acc
 
     def evaluate(self, X, y):
         with torch.no_grad():
             pred = self.forward(X)
-            individual_loss = self.criterion(pred, y)
+            individual_loss, transitivity_loss = self.criterion(pred, y)
             acc = (pred.round() == y).sum().type(torch.cuda.FloatTensor) / (len(y) * 3)
-            transitivity_loss = 5 * self.label_constraint(CorefTagger.sharpen(pred)).sum() / len(pred)
 
         return individual_loss.data.item(), transitivity_loss.data.item(), acc
 
@@ -214,18 +183,109 @@ class CorefTagger(nn.Module):
 
         return pred.data.cpu().numpy()
 
+class CorefTaggerReview(CorefTagger):
+    def __init__(self, coref_tagger):
+        super(CorefTagger, self).__init__()
+        self.coref_tagger = coref_tagger
+        # for param in self.coref_tagger.parameters():  # freeze the model
+        #     param.requires_grad = False
+
+        decoder_size = self.coref_tagger.Decoder.out_features
+        self.Review = nn.RNNCell(decoder_size * 3, 64, nonlinearity='tanh')
+        self.h0 = nn.Parameter(torch.zeros(64).type(torch.cuda.FloatTensor))
+        self.Harmonize = nn.Linear(64, 3)
+
+        self.optimizer = optim.SGD(filter(lambda p: p.requires_grad, self.parameters()), lr=0.005, momentum=0.9, weight_decay=1e-4)
+        self.label_constraint = self.coref_tagger.label_constraint
+
+    def decoder_forward(self, X):
+        input_distances = [X[i].type(torch.cuda.FloatTensor) for i in range(3)]
+        input_speakers = [X[i].type(torch.cuda.FloatTensor) for i in range(3, 6)]
+        input_words = [X[i] for i in range(6, 9)]
+        input_pos_tags = [X[i] for i in range(9, 12)]
+
+        word_lstms = self.coref_tagger.process_words(input_words)
+        pos_lstms = self.coref_tagger.process_pos_tags(input_pos_tags)
+
+        concat01 = torch.cat(
+            [input_distances[0], input_speakers[0], word_lstms[0], pos_lstms[0], word_lstms[1], pos_lstms[1]], -1)
+        hidden01_1 = F.relu(F.dropout(self.coref_tagger.PairHidden_1(concat01), p=0.3))
+        hidden01_2 = F.relu(F.dropout(self.coref_tagger.PairHidden_2(hidden01_1), p=0.3))
+
+        concat12 = torch.cat(
+            [input_distances[1], input_speakers[1], word_lstms[1], pos_lstms[1], word_lstms[2], pos_lstms[2]], -1)
+        hidden12_1 = F.relu(F.dropout(self.coref_tagger.PairHidden_1(concat12), p=0.3))
+        hidden12_2 = F.relu(F.dropout(self.coref_tagger.PairHidden_2(hidden12_1), p=0.3))
+
+        concat20 = torch.cat(
+            [input_distances[2], input_speakers[2], word_lstms[0], pos_lstms[0], word_lstms[2], pos_lstms[2]], -1)
+        hidden20_1 = F.relu(F.dropout(self.coref_tagger.PairHidden_1(concat20), p=0.3))
+        hidden20_2 = F.relu(F.dropout(self.coref_tagger.PairHidden_2(hidden20_1), p=0.3))
+
+        hidden_shared = torch.cat((hidden01_2 + hidden12_2 + hidden20_2, hidden01_2 * hidden12_2 * hidden20_2), -1)
+        context = F.relu(self.coref_tagger.Context(hidden_shared))
+
+        decoder0 = F.tanh(self.coref_tagger.Decoder(torch.cat([hidden01_2, context], -1)))
+        decoder1 = F.tanh(self.coref_tagger.Decoder(torch.cat([hidden12_2, context], -1)))
+        decoder2 = F.tanh(self.coref_tagger.Decoder(torch.cat([hidden20_2, context], -1)))
+        harmonized = F.tanh(self.coref_tagger.Harmonize(torch.cat([decoder0, decoder1, decoder2], -1)))
+        output = F.sigmoid(self.coref_tagger.Out(harmonized))
+        return output, torch.cat([decoder0, decoder1, decoder2], -1)
+
+    # def forward(self, X, steps=2):
+    #     single_out = self.coref_tagger.forward(X)  # (batch, 3)
+    #     h = single_out
+    #     for t in range(steps):
+    #         h = F.sigmoid(self.Review(single_out, h))
+    #         # print("reviewed results", t, h)
+    #
+    #     return h
+
+    def forward(self, X, steps=3):
+        _, decoder_out = self.decoder_forward(X)
+        batch_size = X[0].size()[0]
+        h = self.h0.expand(batch_size, 64)
+        for t in range(steps):
+            h = self.Review(decoder_out, h)
+            # print("reviewed results", t, h)
+
+        out = F.sigmoid(self.Harmonize(h))
+
+        return out
+
+    def fit(self, X, y):
+        pred = self.forward(X)
+        individual_loss, transitivity_loss = self.criterion(pred, y)
+        loss = individual_loss
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        acc = (pred.round() == y).sum().type(torch.cuda.FloatTensor) / (len(y) * 3)
+
+        return individual_loss.data.item(), transitivity_loss.data.item(), acc
+
+
 def train(**kwargs):
     train_gen = kwargs['train_gen']
     val_dir = kwargs['val_dir']
     model_destination = kwargs['model_destination']
     epochs = kwargs['epochs']
     load_model = kwargs['load_model']
+    review = kwargs.get('review', False)
 
     group_size = 100
     train_input_gen = train_gen.generate_triad_input(file_batch=50, threads=3)
 
     assert torch.cuda.is_available()
-    if load_model:
+    if review:
+        if load_model:
+            model = torch.load(os.path.join(model_destination, 'review', 'model.pt'))
+        else:
+            model = CorefTaggerReview(torch.load(os.path.join(model_destination, 'model.pt')))
+        model_destination = os.path.join(model_destination, 'review/')
+        if not os.path.exists(model_destination):
+            os.makedirs(model_destination)
+    elif load_model:
         model = torch.load(os.path.join(model_destination, 'model.pt'))
     else:
         model = CorefTagger(len(train_gen.word_indexes), len(train_gen.pos_tags), word_embeddings=train_gen.embedding_matrix)
@@ -249,7 +309,7 @@ def train(**kwargs):
         val_y = autograd.Variable(torch.from_numpy(val_y).type(torch.cuda.FloatTensor))
         print("val data created.")
 
-    optimizer = optim.SGD(filter(lambda p: p.requires_grad, model.parameters()), lr=0.01, weight_decay=1e-4)
+    # optimizer = optim.SGD(filter(lambda p: p.requires_grad, model.parameters()), lr=0.01, weight_decay=1e-4)
     for epoch in range(epochs):
         sys.stdout.write('\n')
         # train_data_q = subproc_queue.get()
@@ -309,10 +369,10 @@ def train(**kwargs):
                 print(eval_results)
 
             if epoch + 1 == 200:
-                for g in optimizer.param_groups:
+                for g in model.optimizer.param_groups:
                     g['lr'] = 0.005
             if epoch + 1 == 400:
-                for g in optimizer.param_groups:
+                for g in model.optimizer.param_groups:
                     g['lr'] = 0.001
 
     eval_results = evaluator.fast_eval()

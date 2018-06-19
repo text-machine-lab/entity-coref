@@ -264,7 +264,7 @@ def get_triad_model(group_size=None, input_dropout=0.3, max_len=MAXLEN, embeddin
     hidden12_1 = Hidden_1(concat12)
     hidden12_2 = Hidden_2(Dropout(0.3)(hidden12_1))
 
-    concat20 = concatenate([input_distance2, input_speaker2, word_lstm_2, pos_lstm_2, word_lstm_0, pos_lstm_0])
+    concat20 = concatenate([input_distance2, input_speaker2, word_lstm_0, pos_lstm_0, word_lstm_2, pos_lstm_2])
     hidden20_1 = Hidden_1(concat20)
     hidden20_2 = Hidden_2(Dropout(0.3)(hidden20_1))
 

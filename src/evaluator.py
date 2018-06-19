@@ -167,7 +167,7 @@ class TriadEvaluator(object):
             pair_results_mean = {}
             for key, value in pair_results.items():
                 # mean_value = TriadEvaluator.nonlinear_mean(value)
-                mean_value = TriadEvaluator.top_n_mean(value, 0)
+                mean_value = TriadEvaluator.top_n_mean(value, 1)
                 pair_results_mean[key] = mean_value
                 all_pairs_pred.append(mean_value)
                 all_pairs_true.append(pair_true[key])
