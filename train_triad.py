@@ -35,7 +35,7 @@ def main():
                         help="Load saved model and resume training from there")
 
     parser.add_argument("--epochs",
-                        default=200,
+                        default=400,
                         type=int,
                         help="Load saved model and resume training from there")
 
