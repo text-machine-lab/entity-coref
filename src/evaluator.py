@@ -167,23 +167,31 @@ class TriadEvaluator(object):
             pair_results_mean = {}
             for key, value in pair_results.items():
                 # mean_value = TriadEvaluator.nonlinear_mean(value)
-                mean_value = TriadEvaluator.top_n_mean(value, 1)
+                mean_value = TriadEvaluator.top_n_mean(value, 0)
                 pair_results_mean[key] = mean_value
                 all_pairs_pred.append(mean_value)
                 all_pairs_true.append(pair_true[key])
 
             locs, clusters, linkage = clustering(pair_results_mean, binarize=False)
             _, clusters_true, linkage_true = clustering(pair_true, binarize=False)
+
+            clusters = TriadEvaluator.remove_singletons(clusters)
+
             if save_dendrograms:
                 np.save(os.path.join(dest_path, 'linkages', doc_id.split('/')[-1]+'.npy'), linkage)
-                np.save(os.path.join(dest_path, 'true-linkages', doc_id.split('/')[-1] + '.npy'), linkage_true)
+                # np.save(os.path.join(dest_path, 'true-linkages', doc_id.split('/')[-1] + '.npy'), linkage_true)
 
-            length = len(df.loc[df.doc_id == doc_id])
+            doc_df = df.loc[df.doc_id == doc_id]
+            length = len(doc_df)
             # print("Saving %s results..." % doc_id)
             sys.stdout.write("Saving results %d / %d\r" % (i + 1, n_iterations))
             sys.stdout.flush()
             corefs = ['-' for _ in range(length)]
             for loc, cluster in zip(locs, clusters):
+
+                if cluster == -1:  # singletons
+                    continue
+
                 start, end = loc
                 if corefs[start] == '-':
                     corefs[start] = '(' + str(cluster)
@@ -198,8 +206,9 @@ class TriadEvaluator(object):
                     corefs[end] += '|' + str(cluster) + ')'
             with open(os.path.join(dest_path, 'responses', doc_id.split('/')[-1]), 'w') as f:
                 f.write('#begin document (%s);\n' % doc_id)
-                for coref in corefs:
-                    f.write(doc_id + '\t' + coref + '\n')
+                for loc, coref in enumerate(corefs):
+                    word = doc_df.iloc[loc].word
+                    f.write(doc_id + '\t' + word + '\t' + coref + '\n')
                 f.write('\n#end document\n')
 
         print("Completed saving results!")
@@ -225,3 +234,13 @@ class TriadEvaluator(object):
     @staticmethod
     def nonlinear_mean(values):
         return np.mean(np.round(values))
+
+    @staticmethod
+    def remove_singletons(clusters):
+        counter = defaultdict(int)
+        for item in clusters:
+            counter[item] += 1
+        for i, item in enumerate(clusters):
+            if counter[item] == 1:
+                clusters[i] = -1  # use -1 as a special value for singletons
+        return clusters

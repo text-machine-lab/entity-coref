@@ -13,15 +13,15 @@ def scorer(path=None):
         path = './scorers/v8.01/results/dev/'
     if path[-1] != '/': path += '/'
 
-    keys = glob.glob(path+'keys/*')
+    # keys = glob.glob(path+'keys/*')
     responses = glob.glob(path+'responses/*')
-    combined_key = path + 'key.tmp'
+    # combined_key = path + 'key.tmp'
     combined_response = path + 'response.tmp'
 
-    with open(combined_key, 'wb') as f_key:
-        for filename in keys:
-            with open(filename, 'rb') as readfile:
-                shutil.copyfileobj(readfile, f_key)
+    # with open(combined_key, 'wb') as f_key:
+    #     for filename in keys:
+    #         with open(filename, 'rb') as readfile:
+    #             shutil.copyfileobj(readfile, f_key)
 
     with open(combined_response, 'wb') as f_response:
         for filename in responses:
@@ -70,7 +70,8 @@ def main():
     with open(os.path.join(args.model_dir, 'pos_tags.pkl'), 'rb') as f:
         pos_tags = pickle.load(f)
 
-    df = build_dataFrame(args.test_dir, threads=1, suffix='auto_conll')
+    # df = build_dataFrame(args.test_dir, threads=1, suffix='auto_conll')
+    df = build_dataFrame(args.test_dir, threads=1, suffix='v9_auto_mention_boundaries_conll')
     if args.keras:
         from keras.models import load_model
         model = load_model(os.path.join(args.model_dir, 'model.h5'))

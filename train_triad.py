@@ -46,6 +46,9 @@ def main():
 
     args = parser.parse_args()
 
+    assert os.path.isdir(args.train_dir)
+    assert os.path.isdir(args.model_destination)
+
     train_gen = DataGen(build_dataFrame(args.train_dir, threads=3))
     with open(os.path.join(args.model_destination, 'word_indexes.pkl'), 'wb') as f:
         pickle.dump(train_gen.word_indexes, f)

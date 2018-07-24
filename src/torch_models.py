@@ -15,7 +15,7 @@ from src.evaluator import TriadEvaluator
 
 
 class CorefTagger(nn.Module):
-    def __init__(self, vocab_size, pos_size, word_embeddings=None, label_constraint=None):
+    def __init__(self, vocab_size, pos_size, word_embeddings=None):
         super(CorefTagger, self).__init__()
         self.vocab_size = vocab_size
         self.pos_size = pos_size
@@ -24,33 +24,30 @@ class CorefTagger(nn.Module):
         if word_embeddings is not None:
             self.WordEmbedding.weight = nn.Parameter(torch.from_numpy(word_embeddings).type(torch.cuda.FloatTensor))
         # print("word embedding size:", self.WordEmbedding.weight.size())
-        self.WordLSTM = nn.LSTM(EMBEDDING_DIM, 128, num_layers=1, batch_first=True, bidirectional=True)
+        self.WordLSTM = nn.LSTM(EMBEDDING_DIM, 256, num_layers=1, batch_first=True, bidirectional=True)
 
         self.PosEmbedding = nn.Embedding(self.pos_size + 1, self.pos_size + 1)
         self.PosEmbedding.weight = nn.Parameter(torch.eye(self.pos_size + 1).type(torch.cuda.FloatTensor))
-        self.PosLSTM = nn.LSTM(self.pos_size + 1, 8, num_layers=1, batch_first=True, bidirectional=True)
+        self.PosLSTM = nn.LSTM(self.pos_size + 1, 16, num_layers=1, batch_first=True, bidirectional=True)
 
-        self.PairHidden_1 = weight_norm(nn.Linear(256+16+1+1, 256), name='weight')
-        self.PairHidden_2 = weight_norm(nn.Linear(256, 128), name='weight')
-        self.Context = nn.Linear(128*2, 128)
+        self.PairHidden_1 = nn.Linear(2 * (512 + 32) + 1 + 1, 256)
+        self.PairHidden_2 = nn.Linear(256, 128)
+        self.Context = nn.Linear(128, 128)
         self.Decoder = nn.Linear(256, 64)
-        self.Harmonize = nn.Linear(64*3, 64)
-        self.Out = nn.Linear(64, 3)
+        # self.Harmonize = nn.Linear(64 * 3, 8)
+        self.Out = nn.Linear(64 * 3, 3)
 
-        if label_constraint is None:
-            self.label_constraint = torch.nn.Sequential(
-                torch.nn.Linear(3,16),
-                torch.nn.ReLU(),
-                torch.nn.Linear(16,8),
-                torch.nn.ReLU(),
-                torch.nn.Linear(8,1),
-                torch.nn.Sigmoid()).cuda()
-        else:
-            self.label_constraint = label_constraint
+        self.label_constraint = torch.nn.Sequential(
+            torch.nn.Linear(3, 16),
+            torch.nn.ReLU(),
+            torch.nn.Linear(16, 8),
+            torch.nn.ReLU(),
+            torch.nn.Linear(8, 1),
+            torch.nn.Sigmoid()).cuda()
 
-        self.optimizer = optim.SGD(self.parameters(), lr=0.01, momentum=0.9, weight_decay=1e-4)
-        if label_constraint is None:
-            self.init_label_constraint()
+        self.optimizer = optim.SGD(self.parameters(), lr=0.01, weight_decay=0)
+        self.init_label_constraint()
+        # self.c = nn.Parameter(torch.cuda.FloatTensor([1.0]))  # loss weight
 
     def init_label_constraint(self):
         print("Training label constraint model...")
@@ -82,50 +79,42 @@ class CorefTagger(nn.Module):
 
     def process_words(self, input_words):
         word_emb_0 = self.WordEmbedding(input_words[0])
-        word_emb_0 = F.dropout(word_emb_0, p=0.3)
+        word_emb_0 = F.dropout(word_emb_0, p=0.5)
+        word_lstm_0, _ = self.WordLSTM(word_emb_0)  # (batch, seq, feature)
+        # word_lstm_0 = word_lstm_0[:, :, :256] + word_lstm_0[:, :, 256:]  # sum of two directions
+        word_lstm_0, _ = torch.max(word_lstm_0, dim=1, keepdim=False)  # (batch, feature)
+
         word_emb_1 = self.WordEmbedding(input_words[1])
-        word_emb_1 = F.dropout(word_emb_1, p=0.3)
+        word_emb_1 = F.dropout(word_emb_1, p=0.5)
+        word_lstm_1, _ = self.WordLSTM(word_emb_1)  # (batch, seq, feature)
+        # word_lstm_1 = word_lstm_1[:, :, :256] + word_lstm_1[:, :, 256:]  # sum of two directions
+        word_lstm_1, _ = torch.max(word_lstm_1, dim=1, keepdim=False)  # (batch, feature)
+
         word_emb_2 = self.WordEmbedding(input_words[2])
-        word_emb_2 = F.dropout(word_emb_2, p=0.3)
+        word_emb_2 = F.dropout(word_emb_2, p=0.5)
+        word_lstm_2, _ = self.WordLSTM(word_emb_2)  # (batch, seq, feature)
+        # word_lstm_2 = word_lstm_2[:, :, :256] + word_lstm_2[:, :, 256:]  # sum of two directions
+        word_lstm_2, _ = torch.max(word_lstm_2, dim=1, keepdim=False)  # (batch, feature)
 
-        batch, seq = input_words[0].size()
-        border = torch.zeros(batch, 1, EMBEDDING_DIM).cuda()
-
-        word_emb_01 = torch.cat([word_emb_0, border, word_emb_1], -2)
-        word_lstm_01, _ = self.WordLSTM(word_emb_01)  # (batch, seq, feature)
-        word_lstm_01, _ = torch.max(word_lstm_01, dim=1, keepdim=False)  # (batch, feature)
-
-        word_emb_12 = torch.cat([word_emb_1, border, word_emb_2], -2)
-        word_lstm_12, _ = self.WordLSTM(word_emb_12)  # (batch, seq, feature)
-        word_lstm_12, _ = torch.max(word_lstm_12, dim=1, keepdim=False)  # (batch, feature)
-
-        word_emb_02 = torch.cat([word_emb_0, border, word_emb_2], -2)
-        word_lstm_02, _ = self.WordLSTM(word_emb_02)  # (batch, seq, feature)
-        word_lstm_02, _ = torch.max(word_lstm_02, dim=1, keepdim=False)  # (batch, feature)
-
-        return word_lstm_01, word_lstm_12, word_lstm_02
+        return word_lstm_0, word_lstm_1, word_lstm_2
 
     def process_pos_tags(self, input_pos_tags):
         pos_emb_0 = self.PosEmbedding(input_pos_tags[0])
+        pos_lstm_0, _ = self.PosLSTM(pos_emb_0)  # (batch, seq, feature)
+        # pos_lstm_0 = pos_lstm_0[:, :, :16] + pos_lstm_0[:, :, 16:]  # sum of two directions
+        pos_lstm_0, _ = torch.max(pos_lstm_0, dim=1, keepdim=False)
+
         pos_emb_1 = self.PosEmbedding(input_pos_tags[1])
+        pos_lstm_1, _ = self.PosLSTM(pos_emb_1)  # (batch, seq, feature)
+        # pos_lstm_1 = pos_lstm_1[:, :, :16] + pos_lstm_1[:, :, 16:]  # sum of two directions
+        pos_lstm_1, _ = torch.max(pos_lstm_1, dim=1, keepdim=False)
+
         pos_emb_2 = self.PosEmbedding(input_pos_tags[2])
+        pos_lstm_2, _ = self.PosLSTM(pos_emb_2)  # (batch, seq, feature)
+        # pos_lstm_2 = pos_lstm_2[:, :, :16] + pos_lstm_2[:, :, 16:]  # sum of two directions
+        pos_lstm_2, _ = torch.max(pos_lstm_2, dim=1, keepdim=False)
 
-        batch, seq = input_pos_tags[0].size()
-        border = torch.zeros(batch, 1, self.pos_size + 1).cuda()
-
-        pos_emb_01 = torch.cat([pos_emb_0, border, pos_emb_1], -2)
-        pos_lstm_01, _ = self.PosLSTM(pos_emb_01)  # (batch, seq, feature)
-        pos_lstm_01, _ = torch.max(pos_lstm_01, dim=1, keepdim=False)
-
-        pos_emb_12 = torch.cat([pos_emb_1, border, pos_emb_2], -2)
-        pos_lstm_12, _ = self.PosLSTM(pos_emb_12)  # (batch, seq, feature)
-        pos_lstm_12, _ = torch.max(pos_lstm_12, dim=1, keepdim=False)
-
-        pos_emb_02 = torch.cat([pos_emb_0, border, pos_emb_2], -2)
-        pos_lstm_02, _ = self.PosLSTM(pos_emb_02)  # (batch, seq, feature)
-        pos_lstm_02, _ = torch.max(pos_lstm_02, dim=1, keepdim=False)
-
-        return pos_lstm_01, pos_lstm_12, pos_lstm_02
+        return pos_lstm_0, pos_lstm_1, pos_lstm_2
 
     def forward(self, X):
         input_distances = [X[i].type(torch.cuda.FloatTensor) for i in range(3)]
@@ -137,28 +126,27 @@ class CorefTagger(nn.Module):
         pos_lstms = self.process_pos_tags(input_pos_tags)
 
         concat01 = torch.cat(
-            [input_distances[0], input_speakers[0], word_lstms[0], pos_lstms[0]], -1)
+            [input_distances[0], input_speakers[0], word_lstms[0], pos_lstms[0], word_lstms[1], pos_lstms[1]], -1)
         hidden01_1 = F.relu(F.dropout(self.PairHidden_1(concat01), p=0.3))
         hidden01_2 = F.relu(F.dropout(self.PairHidden_2(hidden01_1), p=0.3))
 
         concat12 = torch.cat(
-            [input_distances[1], input_speakers[1], word_lstms[1], pos_lstms[1]], -1)
+            [input_distances[1], input_speakers[1], word_lstms[1], pos_lstms[1], word_lstms[2], pos_lstms[2]], -1)
         hidden12_1 = F.relu(F.dropout(self.PairHidden_1(concat12), p=0.3))
         hidden12_2 = F.relu(F.dropout(self.PairHidden_2(hidden12_1), p=0.3))
 
         concat20 = torch.cat(
-            [input_distances[2], input_speakers[2], word_lstms[2], pos_lstms[2]], -1)
+            [input_distances[2], input_speakers[2], word_lstms[0], pos_lstms[0], word_lstms[2], pos_lstms[2]], -1)
         hidden20_1 = F.relu(F.dropout(self.PairHidden_1(concat20), p=0.3))
         hidden20_2 = F.relu(F.dropout(self.PairHidden_2(hidden20_1), p=0.3))
 
-        hidden_shared = torch.cat((hidden01_2 + hidden12_2 + hidden20_2, hidden01_2 * hidden12_2 * hidden20_2), -1)
+        hidden_shared = hidden01_2 + hidden12_2 + hidden20_2
         context = F.relu(self.Context(hidden_shared))
 
         decoder0 = F.tanh(self.Decoder(torch.cat([hidden01_2, context], -1)))
         decoder1 = F.tanh(self.Decoder(torch.cat([hidden12_2, context], -1)))
         decoder2 = F.tanh(self.Decoder(torch.cat([hidden20_2, context], -1)))
-        harmonized = F.tanh(self.Harmonize(torch.cat([decoder0, decoder1, decoder2], -1)))
-        output = F.sigmoid(self.Out(harmonized))
+        output = F.sigmoid(self.Out(torch.cat([decoder0, decoder1, decoder2], -1)))
 
         return output
 
@@ -457,9 +445,9 @@ def train(**kwargs):
     elif load_model:
         model = torch.load(os.path.join(model_destination, 'model.pt'))
     else:
-        # model = CorefTagger(len(train_gen.word_indexes), len(train_gen.pos_tags), word_embeddings=train_gen.embedding_matrix)
-        model = CorefTaggerCNN(len(train_gen.word_indexes), len(train_gen.pos_tags),
-                            word_embeddings=train_gen.embedding_matrix)
+        model = CorefTagger(len(train_gen.word_indexes), len(train_gen.pos_tags), word_embeddings=train_gen.embedding_matrix)
+        # model = CorefTaggerCNN(len(train_gen.word_indexes), len(train_gen.pos_tags),
+        #                     word_embeddings=train_gen.embedding_matrix)
     model = model.cuda()
     print("Model loaded successfully.")
     training_history = []
@@ -544,7 +532,7 @@ def train(**kwargs):
                     g['lr'] = 0.005
             if epoch + 1 == 400:
                 for g in model.optimizer.param_groups:
-                    g['lr'] = 0.001
+                    g['lr'] = 0.002
 
     eval_results = evaluator.fast_eval()
     print(eval_results)

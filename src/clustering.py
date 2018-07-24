@@ -36,7 +36,7 @@ def clustering(pair_results, binarize=False):
     x.sort(key=lambda x: x[0])
     x = np.array(x)
 
-    clusters, Z = fclusterdata(x, 1.8, criterion='distance', metric=distance, depth=2, method='single')
+    clusters, Z = fclusterdata(x, 1.7, criterion='distance', metric=distance, depth=2, method='single')
     return x, clusters, Z
 
 
