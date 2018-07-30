@@ -1,3 +1,4 @@
+"""Train the triad model"""
 import argparse
 import os
 import pickle

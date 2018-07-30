@@ -15,7 +15,7 @@ from src.word2vec import build_vocab
 EMBEDDING_DIM = 300
 NEIGHBORHOOD = 3  # minimum distance between entities
 MAX_DISTANCE = 15  #40
-MAXLEN = 10 + 10  # max length of entities allowed (target length + context length)
+MAXLEN = 16  # max length of entities allowed
 BATCH_SIZE = 5
 
 def pad_sequences(sequences, maxlen=None, dtype='int32',
@@ -231,7 +231,7 @@ class Entity(object):
     def get_context_representation(self):
         left_edge = max(0, self.start_loc - 5)
         left_words = [self.df.iloc[i].word for i in range(left_edge, self.start_loc)]
-        right_edge = min(len(self.df), self.end_loc+6)
+        right_edge = min(len(self.df), self.end_loc + 6)
         right_words = [self.df.iloc[i].word for i in range(self.end_loc+1, right_edge)]
 
         self.context_words =  left_words + ['_START_'] + self.words + ['_END_'] + right_words
@@ -381,6 +381,7 @@ class DataGen(object):
             max_distance = kwargs['max_distance']
         else:
             max_distance = MAX_DISTANCE
+
         print("max distance: %d" % max_distance)
         def worker(doc_id_q, out_q):
             while True:
@@ -401,6 +402,9 @@ class DataGen(object):
                         entities.append((order, entity))
 
                 if not entities:
+                    if test_data:
+                        print("No entities found in file:", doc_id)
+                        out_q.put([])
                     continue
                 entities = [e[1] for e in sorted(entities, key=lambda x: x[0])]  # sorted according to order
                 N = len(entities)
@@ -408,12 +412,13 @@ class DataGen(object):
                     print("Only one entity in %s" % doc_id)
                     continue
                 elif N < 3:
-                    entities.append(entities[0])  # expand a dyad to a triad
+                    # entities.append(entities[0])  # expand a dyad to a triad
                     N += 1
 
+                entities.insert(0, entities[0])  # always repeat the first entity
                 triad_indexes = combinations(range(N), 3)
 
-                X = [[] for _ in range(12)]
+                X = [[] for _ in range(15)]
                 Y = []
                 index = 0
                 for a, b, c in triad_indexes:
@@ -422,6 +427,10 @@ class DataGen(object):
                     diameter = max([abs(item) for item in distances])  # maximum distance between entities
                     neighborhood = min([abs(item) for item in distances])  # minimum distance between entities
                     if diameter <= max_distance and neighborhood <= NEIGHBORHOOD:
+
+                        mention_spans = [triad[0].start_loc - triad[1].start_loc, triad[0].end_loc - triad[1].end_loc,
+                                         triad[1].start_loc - triad[2].start_loc, triad[1].end_loc - triad[2].end_loc,
+                                         triad[0].start_loc - triad[2].start_loc, triad[0].end_loc - triad[2].end_loc]
 
                         speaker_identities = [int(triad[0].speaker == triad[1].speaker),
                                               int(triad[1].speaker == triad[2].speaker),
@@ -435,11 +444,10 @@ class DataGen(object):
                                        self.get_pos_indexes(triad[1].context_pos),
                                        self.get_pos_indexes(triad[2].context_pos)]
 
-                        X_triad = distances + speaker_identities + word_indexes + pos_indexes
-                        # locations = [triad[ind].order for ind in range(3)]
-                        # X_triad = locations + speaker_identities + word_indexes + pos_indexes
+                        # X_triad = distances + speaker_identities + word_indexes + pos_indexes
+                        X_triad = mention_spans + speaker_identities + word_indexes + pos_indexes
 
-                        for i in range(12):
+                        for i in range(len(X_triad)):
                             X[i].append(X_triad[i])
                         y_triad = [int(triad[0].coref_id == triad[1].coref_id),
                                    int(triad[1].coref_id == triad[2].coref_id),
@@ -453,14 +461,13 @@ class DataGen(object):
                                        (triad[2].start_loc, triad[2].end_loc))] = index
                             index += 1
 
-                for i in range(6):  # distance and speaker
+                for i in range(9):  # distance and speaker
                     X[i] = np.array(X[i])
                     X[i] = np.expand_dims(X[i], axis=-1)
 
-                for i in range(6, 12):  # word and pos tag indexes
+                for i in range(9, 15):  # word and pos tag indexes
                     X[i] = pad_sequences(X[i], maxlen=MAXLEN, dtype='int32', padding='pre', truncating='post',
                                          value=0)
-
                 Y = np.array(Y)
 
                 if test_data:

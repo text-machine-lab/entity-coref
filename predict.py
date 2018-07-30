@@ -3,6 +3,7 @@ import glob
 import os
 import pickle
 import shutil
+import subprocess
 
 from src.build_data import build_dataFrame, DataGen, group_data, slice_data
 from src.evaluator import Evaluator, TriadEvaluator
@@ -28,9 +29,17 @@ def scorer(path=None):
             with open(filename, 'rb') as readfile:
                 shutil.copyfileobj(readfile, f_response)
 
-    # cmd = 'perl scorers/v8.01/scorer.pl all ' + combined_key + ' ' + combined_response + ' none'
-    # proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, stdin=subprocess.PIPE)
-    # print(proc.stdout)
+    cmd = 'perl scorers/v8.01/scorer.pl muc scorers/v8.01/results/test/key.tmp scorers/v8.01/results/test/response.tmp none'.split()
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+    print(proc.communicate()[0].decode('utf-8'))
+
+    cmd = 'perl scorers/v8.01/scorer.pl bcub scorers/v8.01/results/test/key.tmp scorers/v8.01/results/test/response.tmp none'.split()
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+    print(proc.communicate()[0].decode('utf-8'))
+
+    cmd = 'perl scorers/v8.01/scorer.pl ceafe scorers/v8.01/results/test/key.tmp scorers/v8.01/results/test/response.tmp none'.split()
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+    print(proc.communicate()[0].decode('utf-8'))
 
 def main():
     # from keras.models import load_model
@@ -62,6 +71,11 @@ def main():
                         default=False,
                         help="Use keras model")
 
+    parser.add_argument("--clustering_only",
+                        action='store_true',
+                        default=False,
+                        help="Use saved linkage files to perform clustering")
+
     args = parser.parse_args()
 
 
@@ -70,9 +84,11 @@ def main():
     with open(os.path.join(args.model_dir, 'pos_tags.pkl'), 'rb') as f:
         pos_tags = pickle.load(f)
 
-    # df = build_dataFrame(args.test_dir, threads=1, suffix='auto_conll')
-    df = build_dataFrame(args.test_dir, threads=1, suffix='v9_auto_mention_boundaries_conll')
-    if args.keras:
+    df = build_dataFrame(args.test_dir, threads=1, suffix='auto_conll')
+    # df = build_dataFrame(args.test_dir, threads=1, suffix='v9_auto_mention_boundaries_conll')
+    if args.clustering_only:
+        model = None
+    elif args.keras:
         from keras.models import load_model
         model = load_model(os.path.join(args.model_dir, 'model.h5'))
     else:
@@ -91,7 +107,7 @@ def main():
         # filler = multiprocessing.Process(target=evaluator.fill_q_store, args=())
         # filler.start()
         # evaluator.data_available = True
-        evaluator.write_results(df, args.result_dir, n_iterations=n_files)
+        evaluator.write_results(df, args.result_dir, n_iterations=n_files, clustering_only=args.clustering_only)
         # filler.terminate()  # we cannot use daemons because filler has children
 
     else:
