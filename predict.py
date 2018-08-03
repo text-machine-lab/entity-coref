@@ -76,6 +76,11 @@ def main():
                         default=False,
                         help="Use saved linkage files to perform clustering")
 
+    parser.add_argument("--compute_linkage",
+                        action='store_true',
+                        default=False,
+                        help="compute linkage, for clustering_only option")
+
     args = parser.parse_args()
 
 
@@ -107,7 +112,8 @@ def main():
         # filler = multiprocessing.Process(target=evaluator.fill_q_store, args=())
         # filler.start()
         # evaluator.data_available = True
-        evaluator.write_results(df, args.result_dir, n_iterations=n_files, clustering_only=args.clustering_only)
+        evaluator.write_results(df, args.result_dir, n_iterations=n_files,
+                                clustering_only=args.clustering_only, compute_linkage=args.compute_linkage)
         # filler.terminate()  # we cannot use daemons because filler has children
 
     else:

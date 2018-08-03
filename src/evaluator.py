@@ -113,6 +113,8 @@ class TriadEvaluator(object):
             if len(data) == 3:
                 data = data[:2]
             for X, y in slice_data(data, 100):
+                if y.shape[-1] == 3:
+                    y = y[:, 1:]
                 pred = self.model.predict(X) # (group_size, 3)
                 Y_true.append(y)
                 Y_pred.append(pred)
@@ -125,7 +127,7 @@ class TriadEvaluator(object):
 
         return classification_report(Y_true, Y_pred, digits=3)
 
-    def write_results(self, df, dest_path, n_iterations, save_dendrograms=True, clustering_only=False):
+    def write_results(self, df, dest_path, n_iterations, save_dendrograms=True, clustering_only=False, compute_linkage=False):
         """Perform evaluation on all test data, write results"""
         # assert self.data_available
         print("# files: %d" % n_iterations)
@@ -133,10 +135,11 @@ class TriadEvaluator(object):
         all_pairs_true = []
         all_pairs_pred = []
         processed_docs = set([])
-        discarded = 0
         doc_ids = df.doc_id.unique()
-        # i = n_iterations
-        i = n_iterations -2 #  ignore 2 large files for fast evaluation
+        i = n_iterations
+        # i = n_iterations -2 #  ignore 2 large files for fast evaluation
+        t = 2.5
+
         while i > 0:
             if not clustering_only:
                 test_data_q = next(self.test_input_gen)
@@ -145,6 +148,9 @@ class TriadEvaluator(object):
                     i -= 1
                     continue
                 X, y, index_map = test_data_q[0]
+                if y.shape[-1] == 3:
+                    y = y[:, 1:]
+
                 doc_id = list(index_map.keys())[0][0]  # python3 does not support keys() as a list
                 if doc_id in processed_docs:
                     # print("%s already processed before!" % doc_id)
@@ -155,34 +161,33 @@ class TriadEvaluator(object):
                 for X, _ in slice_data([X, y], 50):  # do this to avoid very large batches
                     pred.append(self.model.predict(X))
                 pred = np.concatenate(pred)
-                pred = np.reshape(pred, [-1, 3])  # in case there are batches
+                pred = np.reshape(pred, [-1, 2])  # in case there are batches
 
-                true = np.reshape(y, [-1, 3])
+                true = np.reshape(y, [-1, 2])
 
                 pair_results = defaultdict(list)
                 pair_true = {}
                 for key in index_map:
-                    if sum(np.round(pred[index_map[key]])) == 2:  # skip illogical triads
-                        discarded += 1
-                    if key[1][0] == key[2][0]:
-                        pair_results[(key[1], key[2])].append(pred[index_map[key]][0])
-                    pair_results[(key[2], key[3])].append(pred[index_map[key]][1])
-                    pair_results[(key[3], key[1])].append(pred[index_map[key]][2])
+                    pair_results[(key[2], key[3])].append(pred[index_map[key]][0])
+                    pair_results[(key[1], key[3])].append(pred[index_map[key]][1])
 
-                    pair_true[(key[1], key[2])] = true[index_map[key]][0]
-                    pair_true[(key[2], key[3])] = true[index_map[key]][1]
-                    pair_true[(key[3], key[1])] = true[index_map[key]][2]
+                    pair_true[(key[2], key[3])] = true[index_map[key]][0]
+                    pair_true[(key[1], key[3])] = true[index_map[key]][1]
+
+                # save raw scores
+                pickle.dump(pair_results, open(os.path.join(dest_path, 'raw_scores', doc_id.split('/')[-1]+'results.pkl'), 'wb'))
 
                 pair_results_mean = {}
                 for key, value in pair_results.items():
-                    mean_value = TriadEvaluator.top_n_mean(value, 0)
+                    # mean_value = TriadEvaluator.top_n_mean(value, 0)
                     # mean_value = TriadEvaluator.bottom_n_mean(value, 3)
+                    mean_value = TriadEvaluator.last_n_values(value, 2)
                     pair_results_mean[key] = mean_value
                     all_pairs_pred.append(mean_value)
                     all_pairs_true.append(pair_true[key])
 
-                locs, clusters, linkage = clustering(pair_results_mean, binarize=False)
-                _, clusters_true, linkage_true = clustering(pair_true, binarize=False)
+                locs, clusters, linkage = clustering(pair_results_mean, binarize=False, t=t)
+                _, clusters_true, linkage_true = clustering(pair_true, binarize=False, t=t)
 
                 clusters = TriadEvaluator.remove_singletons(clusters)
 
@@ -194,22 +199,38 @@ class TriadEvaluator(object):
 
             else:  # clustering only
                 from scipy.cluster.hierarchy import inconsistent, fcluster
+                doc_id = doc_ids[i - 1]
+                if doc_id.split('/')[-1] == 'wsj_2390':
+                    print("file not found:", doc_id)
+                    i -= 1
+                    continue
 
-                doc_id = doc_ids[i-1]
-                try:
+                if compute_linkage:
+                    pair_results = pickle.load(open(os.path.join(dest_path, 'raw_scores', doc_id.split('/')[-1]+'results.pkl'), 'rb'))
+
+                    pair_results_mean = {}
+                    for key, value in pair_results.items():
+                        # mean_value = TriadEvaluator.top_n_mean(value, 0)
+                        # mean_value = TriadEvaluator.bottom_n_mean(value, 3)
+                        mean_value = TriadEvaluator.last_n_values(value, 3)
+                        pair_results_mean[key] = mean_value
+
+                    locs, clusters, linkage = clustering(pair_results_mean, binarize=False, t=t)
+                    np.save(os.path.join(dest_path, 'linkages', doc_id.split('/')[-1] + '.npy'), linkage)
+
+
+                else:
                     linkage = np.load(os.path.join(dest_path, 'linkages', doc_id.split('/')[-1] + '.npy'))
                     with open(os.path.join(dest_path, 'linkages', doc_id.split('/')[-1]+'-locs.pkl'), 'rb') as f:
                         locs = pickle.load(f)
-                except FileNotFoundError:
-                    print("file not found:", doc_id)
-                    locs = []
-                t = 1.6
-                depth = 6
-                criterion = 'distance'
-                R = None
-                # criterion = 'inconsistent'
-                # R = inconsistent(linkage, d=depth)
-                clusters = fcluster(linkage, criterion=criterion, depth=depth, R=R, t=t)
+
+                    depth = 6
+                    criterion = 'distance'
+                    R = None
+                    # criterion = 'inconsistent'
+                    # R = inconsistent(linkage, d=depth)
+                    clusters = fcluster(linkage, criterion=criterion, depth=depth, R=R, t=t)
+
                 clusters = TriadEvaluator.remove_singletons(clusters)
 
             doc_df = df.loc[df.doc_id == doc_id]
@@ -250,7 +271,14 @@ class TriadEvaluator(object):
             print("True histogram", np.histogram(all_pairs_true, bins=4))
             print("Prediction histogram", np.histogram(all_pairs_pred, bins=4))
             print(classification_report(all_pairs_true, np.round(all_pairs_pred), digits=3))
-            print("Discarded triads:", discarded)
+
+    @staticmethod
+    def last_n_values(values, n):
+        if len(values) >= n:
+            value = np.mean(values[-n:])
+        else:
+            value = np.mean(values)
+        return value
 
     @staticmethod
     def top_n_mean(values, n):

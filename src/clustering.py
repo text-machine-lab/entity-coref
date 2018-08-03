@@ -3,7 +3,7 @@ import scipy.spatial.distance as distance
 from scipy.cluster.hierarchy import linkage, inconsistent, fcluster
 import numpy as np
 
-def clustering(pair_results, binarize=False):
+def clustering(pair_results, binarize=False, t=1.7):
     def distance(e1, e2):
         e1 = tuple(e1.astype(int))
         e2 = tuple(e2.astype(int))
@@ -15,8 +15,7 @@ def clustering(pair_results, binarize=False):
             dist = min(1.0 / (similarity), 10.0)
             # dist = (10 * (1 - pair_results[(e1, e2)])) ** 2
         else:
-            # dist = 0.9
-            dist = 10.0
+            dist = t + 0.2
         if binarize:
             dist = np.round(dist)
 
@@ -35,7 +34,7 @@ def clustering(pair_results, binarize=False):
     x.sort()
     x = np.array(x)
 
-    clusters, Z = fclusterdata(x, 1.6, criterion='distance', metric=distance, depth=2, method='single')
+    clusters, Z = fclusterdata(x, t, criterion='distance', metric=distance, depth=2, method='average')
     return x, clusters, Z
 
 

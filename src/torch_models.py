@@ -36,47 +36,9 @@ class CorefTagger(nn.Module):
         self.Context = nn.Linear(128, 128)
         self.Decoder = nn.Linear(256, 64)
         # self.Harmonize = nn.Linear(64 * 3, 8)
-        self.Out = nn.Linear(64 * 3, 3)
-
-        self.label_constraint = torch.nn.Sequential(
-            torch.nn.Linear(3, 16),
-            torch.nn.ReLU(),
-            torch.nn.Linear(16, 8),
-            torch.nn.ReLU(),
-            torch.nn.Linear(8, 1),
-            torch.nn.Sigmoid()).cuda()
+        self.Out = nn.Linear(64 * 2, 2)
 
         self.optimizer = optim.SGD(self.parameters(), lr=0.01, weight_decay=0)
-        self.init_label_constraint()
-        # self.c = nn.Parameter(torch.cuda.FloatTensor([1.0]))  # loss weight
-
-    def init_label_constraint(self):
-        print("Training label constraint model...")
-        X = autograd.Variable(torch.cuda.FloatTensor([[0, 0, 0], [0, 0, 1], [0, 1, 0], [0, 1, 1],
-                                                              [1, 0, 0], [1, 0, 1], [1, 1, 0], [1, 1, 1]]))
-        y = autograd.Variable(torch.cuda.FloatTensor([[0], [0], [0], [1], [0], [1], [1], [0]]))
-
-        loss_fn = nn.BCELoss()
-        optimizer = optim.SGD(self.label_constraint.parameters(), lr=0.01, momentum=0.9, weight_decay=1e-4)
-        while True:
-            for e in range(2000):
-                pred = self.label_constraint(X)
-                loss = loss_fn(pred, y)
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-
-            if loss.data.item() < 1e-2: break
-            else:
-                print(pred)
-                print("Keep training label constraint...")
-                sys.stdout.flush()
-
-        print("Finished training lable constraint:")
-        print(pred)
-
-        for param in self.label_constraint.parameters():  # freeze the model
-            param.requires_grad = False
 
     def process_words(self, input_words):
         word_emb_0 = self.WordEmbedding(input_words[0])
@@ -123,40 +85,6 @@ class CorefTagger(nn.Module):
 
         return pos_lstm_0, pos_lstm_1, pos_lstm_2
 
-    # def forward(self, X):
-    #     input_distances = [X[i].type(torch.cuda.FloatTensor) for i in range(6)]
-    #     input_speakers = [X[i].type(torch.cuda.FloatTensor) for i in range(6, 9)]
-    #     input_words = [X[i] for i in range(9, 12)]
-    #     input_pos_tags = [X[i] for i in range(12, 15)]
-    #
-    #     word_lstms = self.process_words(input_words)
-    #     pos_lstms = self.process_pos_tags(input_pos_tags)
-    #
-    #     concat01 = torch.cat(
-    #         [input_distances[0], input_distances[1], input_speakers[0], word_lstms[0], pos_lstms[0], word_lstms[1], pos_lstms[1]], -1)
-    #     hidden01_1 = F.relu(F.dropout(self.PairHidden_1(concat01), p=0.3))
-    #     hidden01_2 = F.relu(F.dropout(self.PairHidden_2(hidden01_1), p=0.3))
-    #
-    #     concat12 = torch.cat(
-    #         [input_distances[2], input_distances[3], input_speakers[1], word_lstms[1], pos_lstms[1], word_lstms[2], pos_lstms[2]], -1)
-    #     hidden12_1 = F.relu(F.dropout(self.PairHidden_1(concat12), p=0.3))
-    #     hidden12_2 = F.relu(F.dropout(self.PairHidden_2(hidden12_1), p=0.3))
-    #
-    #     concat20 = torch.cat(
-    #         [input_distances[4], input_distances[5], input_speakers[2], word_lstms[0], pos_lstms[0], word_lstms[2], pos_lstms[2]], -1)
-    #     hidden20_1 = F.relu(F.dropout(self.PairHidden_1(concat20), p=0.3))
-    #     hidden20_2 = F.relu(F.dropout(self.PairHidden_2(hidden20_1), p=0.3))
-    #
-    #     hidden_shared = hidden01_2 + hidden12_2 + hidden20_2
-    #     context = F.relu(self.Context(hidden_shared))
-    #
-    #     decoder0 = F.tanh(self.Decoder(torch.cat([hidden01_2, context], -1)))
-    #     decoder1 = F.tanh(self.Decoder(torch.cat([hidden12_2, context], -1)))
-    #     decoder2 = F.tanh(self.Decoder(torch.cat([hidden20_2, context], -1)))
-    #     output = F.sigmoid(self.Out(torch.cat([decoder0, decoder1, decoder2], -1)))
-    #
-    #     return output
-
     def forward(self, X):
         input_distances = [X[i].type(torch.cuda.FloatTensor) for i in range(6)]
         input_speakers = [X[i].type(torch.cuda.FloatTensor) for i in range(6, 9)]
@@ -168,28 +96,28 @@ class CorefTagger(nn.Module):
 
         concat01 = torch.cat(
             [input_distances[0], input_distances[1], input_speakers[0], word_lstms[0], pos_lstms[0], word_lstms[1], pos_lstms[1]], -1)
-        hidden01_1 = F.relu(F.dropout(self.PairHidden_1(concat01), p=0.3))
-        hidden01_2 = F.relu(F.dropout(self.PairHidden_2(hidden01_1), p=0.3))
+        hidden01_1 = F.relu(F.dropout(self.PairHidden_1(concat01), p=0.2))
+        hidden01_2 = F.relu(F.dropout(self.PairHidden_2(hidden01_1), p=0.2))
 
         concat12 = torch.cat(
             [input_distances[2], input_distances[3], input_speakers[1], word_lstms[1], pos_lstms[1], word_lstms[2], pos_lstms[2]], -1)
-        hidden12_1 = F.relu(F.dropout(self.PairHidden_1(concat12), p=0.3))
-        hidden12_2 = F.relu(F.dropout(self.PairHidden_2(hidden12_1), p=0.3))
+        hidden12_1 = F.relu(F.dropout(self.PairHidden_1(concat12), p=0.2))
+        hidden12_2 = F.relu(F.dropout(self.PairHidden_2(hidden12_1), p=0.2))
 
         concat20 = torch.cat(
             [input_distances[4], input_distances[5], input_speakers[2], word_lstms[0], pos_lstms[0], word_lstms[2], pos_lstms[2]], -1)
-        hidden20_1 = F.relu(F.dropout(self.PairHidden_1(concat20), p=0.3))
-        hidden20_2 = F.relu(F.dropout(self.PairHidden_2(hidden20_1), p=0.3))
+        hidden20_1 = F.relu(F.dropout(self.PairHidden_1(concat20), p=0.2))
+        hidden20_2 = F.relu(F.dropout(self.PairHidden_2(hidden20_1), p=0.2))
 
         hidden_shared = hidden01_2 + hidden12_2 + hidden20_2
         context = F.relu(self.Context(hidden_shared))
 
-        decoder0 = F.tanh(self.Decoder(torch.cat([hidden01_2, context], -1)))
+        # decoder0 = F.tanh(self.Decoder(torch.cat([hidden01_2, context], -1)))
         decoder1 = F.tanh(self.Decoder(torch.cat([hidden12_2, context], -1)))
         decoder2 = F.tanh(self.Decoder(torch.cat([hidden20_2, context], -1)))
-        output = F.sigmoid(self.Out(torch.cat([decoder0, decoder1, decoder2], -1)))
+        output = F.sigmoid(self.Out(torch.cat([decoder1, decoder2], -1)))
 
-        return output
+        return output  # batch * 2
 
     @staticmethod
     def sharpen(x, alpha=5.0):
@@ -198,28 +126,30 @@ class CorefTagger(nn.Module):
     def criterion(self, pred, truth):
         individual_loss = nn.BCELoss()(pred, truth)
 
-        transitivity_loss = 5 * self.label_constraint(CorefTagger.sharpen(pred)).sum() / len(pred)
-
-        return individual_loss, transitivity_loss
+        return individual_loss
 
     def fit(self, X, y):
+        if y.size()[-1] == 3:
+            y = y[:, 1:]
+
         pred = self.forward(X)
-        individual_loss, transitivity_loss = self.criterion(pred, y)
-        loss = individual_loss #+ transitivity_loss
+        loss = self.criterion(pred, y)
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
-        acc = (pred.round() == y).sum().type(torch.cuda.FloatTensor) / (len(y)*3)
+        acc = (pred.round() == y).sum().type(torch.cuda.FloatTensor) / (len(y) * 2)
 
-        return individual_loss.data.item(), transitivity_loss.data.item(), acc
+        return loss.data.item(), acc
 
     def evaluate(self, X, y):
+        if y.size()[-1] == 3:
+            y = y[:, 1:]
         with torch.no_grad():
             pred = self.forward(X)
-            individual_loss, transitivity_loss = self.criterion(pred, y)
-            acc = (pred.round() == y).sum().type(torch.cuda.FloatTensor) / (len(y) * 3)
+            loss = self.criterion(pred, y)
+            acc = (pred.round() == y).sum().type(torch.cuda.FloatTensor) / (len(y) * 2)
 
-        return individual_loss.data.item(), transitivity_loss.data.item(), acc
+        return loss.data.item(), acc
 
     def predict(self, X_np):
         """Takes numpy array as input"""
@@ -505,7 +435,7 @@ def train(**kwargs):
     if val_dir is not None:
         # Need the same word indexes and pos indexes for training and test data
         val_gen = DataGen(build_dataFrame(val_dir, threads=1), train_gen.word_indexes, train_gen.pos_tags)
-        val_input_gen = val_gen.generate_triad_input(file_batch=10, looping=True, threads=2)  # file_batch is the # files to use
+        val_input_gen = val_gen.generate_triad_input(file_batch=20, looping=True, threads=2)  # file_batch is the # files to use
         print("val_input_gen created.")
         # just get data from 1 for try
         val_data_q = next(val_input_gen)
@@ -518,6 +448,9 @@ def train(**kwargs):
         print("val data created.")
 
     # optimizer = optim.SGD(filter(lambda p: p.requires_grad, model.parameters()), lr=0.01, weight_decay=1e-4)
+    if load_model:
+        for g in model.optimizer.param_groups:
+            g['lr'] = 0.005
     for epoch in range(epochs):
         sys.stdout.write('\n')
         # train_data_q = subproc_queue.get()
@@ -534,26 +467,22 @@ def train(**kwargs):
                 X = [autograd.Variable(torch.from_numpy(x).type(torch.cuda.LongTensor)) for x in X]
                 y = autograd.Variable(torch.from_numpy(y).type(torch.cuda.FloatTensor))
 
-                loss, trans_loss, acc = model.fit(X, y)
-                val_loss, val_trans_loss, val_acc = model.evaluate(val_X, val_y)
+                loss, acc = model.fit(X, y)
+                val_loss, val_acc = model.evaluate(val_X, val_y)
 
                 history['loss'].append(loss)
-                history['trans_loss'].append(trans_loss)
                 history['acc'].append(acc)
                 history['val_loss'].append(val_loss)
-                history['val_trans_loss'].append(val_trans_loss)
                 history['val_acc'].append(val_acc)
 
             acc = np.mean(history['acc'])
             loss = np.mean(history['loss'])
-            trans_loss = np.mean(history['trans_loss'])
             val_acc = np.mean(history['val_acc'])
             val_loss = np.mean(history['val_loss'])
-            val_trans_loss = np.mean(history['val_trans_loss'])
 
             sys.stdout.write(
-                "epoch %d after training file %d/%d--- -%ds - loss : %.4f - %.4f - acc : %.4f - val_loss : %.4f - %.4f - val_acc : %.4f\r" % (
-                    epoch + 1, n + 1, n_training_files, int(time.time() - start), loss, trans_loss, acc, val_loss, val_trans_loss, val_acc))
+                "epoch %d after training file %d/%d--- -%ds - loss : %.4f - acc : %.4f - val_loss : %.4f - val_acc : %.4f\r" % (
+                    epoch + 1, n + 1, n_training_files, int(time.time() - start), loss, acc, val_loss, val_acc))
             sys.stdout.flush()
 
         training_history.append({'categorical_accuracy': acc, 'loss': loss})
@@ -576,9 +505,14 @@ def train(**kwargs):
                 # print("\nlabel constraint factor:", model.c)
                 print(eval_results)
 
-            if epoch + 1 == 100:
+            if epoch + 1 == 150:
+                if load_model:
+                    lr = 0.002
+                else:
+                    lr = 0.005
                 for g in model.optimizer.param_groups:
-                    g['lr'] = 0.005
+                    g['lr'] = lr
+
             if epoch + 1 == 300:
                 for g in model.optimizer.param_groups:
                     g['lr'] = 0.002

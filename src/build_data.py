@@ -229,17 +229,17 @@ class Entity(object):
         return self.order, locations
 
     def get_context_representation(self):
-        left_edge = max(0, self.start_loc - 5)
+        left_edge = max(0, self.start_loc - 8)
         left_words = [self.df.iloc[i].word for i in range(left_edge, self.start_loc)]
-        right_edge = min(len(self.df), self.end_loc + 6)
+        right_edge = min(len(self.df), self.end_loc + 9)
         right_words = [self.df.iloc[i].word for i in range(self.end_loc+1, right_edge)]
 
         self.context_words =  left_words + ['_START_'] + self.words + ['_END_'] + right_words
 
     def get_context_pos(self):
-        left_edge = max(0, self.start_loc - 5)
+        left_edge = max(0, self.start_loc - 8)
         left_pos = [self.df.iloc[i].pos for i in range(left_edge, self.start_loc)]
-        right_edge = min(len(self.df), self.end_loc + 6)
+        right_edge = min(len(self.df), self.end_loc + 9)
         right_pos = [self.df.iloc[i].pos for i in range(self.end_loc + 1, right_edge)]
 
         self.context_pos = left_pos + ['_START_POS_'] + self.pos_tags + ['_END_POS_'] + right_pos
@@ -423,6 +423,11 @@ class DataGen(object):
                 index = 0
                 for a, b, c in triad_indexes:
                     triad = (entities[a], entities[b], entities[c])
+                    # if triad[1].start_loc < triad[0].start_loc or triad[2].start_loc < triad[1].start_loc:
+                    #     print(doc_id, (triad[0].start_loc, triad[0].end_loc),
+                    #                    (triad[1].start_loc, triad[1].end_loc),
+                    #                    (triad[2].start_loc, triad[2].end_loc))
+                    #     sys.exit()
                     distances = DataGen.get_triad_distances(triad)
                     diameter = max([abs(item) for item in distances])  # maximum distance between entities
                     neighborhood = min([abs(item) for item in distances])  # minimum distance between entities
@@ -515,7 +520,9 @@ class DataGen(object):
         return [d0, d1, d2]
 
     def get_word_indexes(self, word_list):
-        return [self.word_indexes[word] if word in self.word_indexes else self.word_indexes['UKN'] for word in word_list]
+        # return [self.word_indexes[word] if word in self.word_indexes else self.word_indexes['UKN'] for word in word_list]
+        return [self.word_indexes[word] if word in self.word_indexes else self.word_indexes.get(word[0],
+                                            self.word_indexes['UKN']) for word in word_list]  # use the first letter
 
     def get_pos_indexes(self, pos_list):
         return [self.pos_tags.index(pos) + 1 if pos in self.pos_tags else self.pos_tags.index('UKN') for pos in pos_list]
