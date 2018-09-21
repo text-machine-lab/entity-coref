@@ -30,6 +30,7 @@ class CorefTagger(nn.Module):
         self.PosEmbedding = nn.Embedding(self.pos_size + 1, self.pos_size + 1)
         self.PosEmbedding.weight = nn.Parameter(torch.eye(self.pos_size + 1).type(torch.cuda.FloatTensor))
         self.PosLSTM = nn.LSTM(self.pos_size + 1, 16, num_layers=1, batch_first=True, bidirectional=True)
+        self.AttentionLSTM = Attention(16 * 2)
 
         self.PairHidden_1 = nn.Linear(2 * (512 + 32) + 2 + 1, 256)
         self.PairHidden_2 = nn.Linear(256, 128)
@@ -70,20 +71,26 @@ class CorefTagger(nn.Module):
     def process_pos_tags(self, input_pos_tags):
         pos_emb_0 = self.PosEmbedding(input_pos_tags[0])
         pos_lstm_0, _ = self.PosLSTM(pos_emb_0)  # (batch, seq, feature)
-        # pos_lstm_0 = pos_lstm_0[:, :, :16] + pos_lstm_0[:, :, 16:]  # sum of two directions
-        pos_lstm_0, _ = torch.max(pos_lstm_0, dim=1, keepdim=False)
+        # pos_lstm_0, _ = torch.max(pos_lstm_0, dim=1, keepdim=False)
 
         pos_emb_1 = self.PosEmbedding(input_pos_tags[1])
         pos_lstm_1, _ = self.PosLSTM(pos_emb_1)  # (batch, seq, feature)
-        # pos_lstm_1 = pos_lstm_1[:, :, :16] + pos_lstm_1[:, :, 16:]  # sum of two directions
-        pos_lstm_1, _ = torch.max(pos_lstm_1, dim=1, keepdim=False)
+        # pos_lstm_1, _ = torch.max(pos_lstm_1, dim=1, keepdim=False)
 
         pos_emb_2 = self.PosEmbedding(input_pos_tags[2])
         pos_lstm_2, _ = self.PosLSTM(pos_emb_2)  # (batch, seq, feature)
-        # pos_lstm_2 = pos_lstm_2[:, :, :16] + pos_lstm_2[:, :, 16:]  # sum of two directions
-        pos_lstm_2, _ = torch.max(pos_lstm_2, dim=1, keepdim=False)
+        # pos_lstm_2, _ = torch.max(pos_lstm_2, dim=1, keepdim=False)
 
-        return pos_lstm_0, pos_lstm_1, pos_lstm_2
+        pos_repr_0, _ = self.AttentionLSTM(pos_lstm_0, torch.cat([pos_lstm_1, pos_lstm_2], 1))
+        pos_repr_0, _ = torch.max(pos_repr_0, dim=1, keepdim=False)  # (batch, feature)
+
+        pos_repr_1, _ = self.AttentionLSTM(pos_lstm_1, torch.cat([pos_lstm_0, pos_lstm_2], 1))
+        pos_repr_1, _ = torch.max(pos_repr_1, dim=1, keepdim=False)  # (batch, feature)
+
+        pos_repr_2, _ = self.AttentionLSTM(pos_lstm_2, torch.cat([pos_lstm_0, pos_lstm_1], 1))
+        pos_repr_2, _ = torch.max(pos_repr_2, dim=1, keepdim=False)  # (batch, feature)
+
+        return pos_repr_0, pos_repr_1, pos_repr_2
 
     def forward(self, X):
         input_distances = [X[i].type(torch.cuda.FloatTensor) for i in range(6)]

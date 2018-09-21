@@ -11,10 +11,11 @@ from src.evaluator import Evaluator, TriadEvaluator
 
 def scorer(path=None):
     if path is None:
-        path = './scorers/v8.01/results/dev/'
+        path = './scorers/v8.01/results/test/'
     if path[-1] != '/': path += '/'
 
     # keys = glob.glob(path+'keys/*')
+    # keys = glob.glob('data/test/*conll')
     responses = glob.glob(path+'responses/*')
     # combined_key = path + 'key.tmp'
     combined_response = path + 'response.tmp'
@@ -29,16 +30,16 @@ def scorer(path=None):
             with open(filename, 'rb') as readfile:
                 shutil.copyfileobj(readfile, f_response)
 
-    cmd = 'perl scorers/v8.01/scorer.pl muc scorers/v8.01/results/test/key.tmp scorers/v8.01/results/test/response.tmp none'.split()
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+    cmd = 'perl scorers/v8.01/scorer.pl muc results/key.tmp %s none' %combined_response
+    proc = subprocess.Popen(cmd.split(), stdout=subprocess.PIPE)
     print(proc.communicate()[0].decode('utf-8'))
 
-    cmd = 'perl scorers/v8.01/scorer.pl bcub scorers/v8.01/results/test/key.tmp scorers/v8.01/results/test/response.tmp none'.split()
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+    cmd = 'perl scorers/v8.01/scorer.pl bcub results/key.tmp %s none' %combined_response
+    proc = subprocess.Popen(cmd.split(), stdout=subprocess.PIPE)
     print(proc.communicate()[0].decode('utf-8'))
 
-    cmd = 'perl scorers/v8.01/scorer.pl ceafe scorers/v8.01/results/test/key.tmp scorers/v8.01/results/test/response.tmp none'.split()
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+    cmd = 'perl scorers/v8.01/scorer.pl ceafe results/key.tmp %s none' %combined_response
+    proc = subprocess.Popen(cmd.split(), stdout=subprocess.PIPE)
     print(proc.communicate()[0].decode('utf-8'))
 
 def main():
@@ -90,7 +91,7 @@ def main():
         pos_tags = pickle.load(f)
 
     df = build_dataFrame(args.test_dir, threads=1, suffix='auto_conll')
-    # df = build_dataFrame(args.test_dir, threads=1, suffix='v9_auto_mention_boundaries_conll')
+    # df = build_dataFrame(args.test_dir, threads=1, suffix='corenlp_conll')
     if args.clustering_only:
         model = None
     elif args.keras:
@@ -127,7 +128,7 @@ def main():
         print("Saving result files...")
         evaluator.write_results(df, args.result_dir)
 
-    scorer('./scorers/v8.01/results/test/')
+    scorer(args.result_dir)
 
 if __name__ == "__main__":
     main()

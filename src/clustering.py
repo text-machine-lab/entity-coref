@@ -2,8 +2,12 @@ import sys
 import scipy.spatial.distance as distance
 from scipy.cluster.hierarchy import linkage, inconsistent, fcluster
 import numpy as np
+import copy
 
-def clustering(pair_results, binarize=False, t=1.7):
+
+def clustering(raw_pair_results, binarize=False, t=1.7, criterion='distance', method='average'):
+    """this function is...
+    """
     def distance(e1, e2):
         e1 = tuple(e1.astype(int))
         e2 = tuple(e2.astype(int))
@@ -21,6 +25,7 @@ def clustering(pair_results, binarize=False, t=1.7):
 
         return dist
 
+    pair_results = copy.copy(raw_pair_results)
     # distance has no direction
     if sys.version_info[0] == 3:
         pairs = list(pair_results.keys())
@@ -34,11 +39,11 @@ def clustering(pair_results, binarize=False, t=1.7):
     x.sort()
     x = np.array(x)
 
-    clusters, Z = fclusterdata(x, t, criterion='distance', metric=distance, depth=2, method='average')
+    clusters, Z = fclusterdata(x, t, criterion=criterion, metric=distance, depth=2, method=method)
     return x, clusters, Z
 
 
-def fclusterdata(X, t, criterion='inconsistent',
+def fclusterdata(X, t, criterion='distance',
                      metric='euclidean', depth=2, method='single', R=None):
     """
     This is adapted from scipy fclusterdata.

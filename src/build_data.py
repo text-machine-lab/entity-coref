@@ -11,6 +11,7 @@ import multiprocessing
 from itertools import combinations
 
 from src.word2vec import build_vocab
+from src.preprocess import SPEAKER_MAP
 
 EMBEDDING_DIM = 300
 NEIGHBORHOOD = 3  # minimum distance between entities
@@ -118,13 +119,13 @@ def build_dataFrame(path, threads=4, suffix='gold_conll'):
     time.sleep(1)
     df = None
 
-    while df is None or len(df.doc_id.unique()) < n_files:
+    while df is None or len(df.file_id.unique()) < n_files:
         item = data_queue.get()
         if df is None:
             df = item
         else:
             df = df.append(item)
-        sys.stdout.write("Processed %d files from data queue\r" % len(df.doc_id.unique()))
+        sys.stdout.write("Processed %d files from data queue\r" % len(df.file_id.unique()))
         # if not worker_alive(workers): break
 
     time.sleep(1)
@@ -134,22 +135,26 @@ def build_dataFrame(path, threads=4, suffix='gold_conll'):
     for p in workers:
         p.join()
 
-    df.part_nb = pd.to_numeric(df.part_nb, errors='coerce')
+    # df.part_nb = pd.to_numeric(df.part_nb, errors='coerce')
     df.word_nb = pd.to_numeric(df.word_nb, errors='coerce')
     print("\ndata frame is built successfully!")
-    print("Processed files: %d" % len(df.doc_id.unique()))
+    print("Processed files: %d" % len(df.file_id.unique()))
 
     return df
 
 
-def get_df(data_file, dataFrame=None):
+def get_df(data_file, dataFrame=None, n_fields=12):
     data_list = []
     with open(data_file) as f:
         for line in f:
             line = line.strip()
             if line and line[0] != '#':
                 fields = line.split()
-                assert len(fields) >= 12
+                try:
+                    assert len(fields) >= n_fields
+                except AssertionError:
+                    print(fields)
+                    raise AssertionError
                 fields = fields[:11] + [fields[-1]]
                 data_list.append(fields)
                 # df.loc[len(df)] = fields
@@ -157,18 +162,63 @@ def get_df(data_file, dataFrame=None):
     if not data_list:
         return None
 
+    # 12 columns, ignore predicate arguments
+    columns = ['file_id', 'part_nb', 'word_nb', 'word', 'pos', 'parse', 'predicate_lemma',
+               'predicate_frame', 'word_sense', 'speaker', 'name_entities', 'coref']
+
+    new_data = pd.DataFrame(data_list, columns=columns)
+    unique_doc_ids = new_data["file_id"] + '-' + new_data["part_nb"].map(str)
+    new_data.insert(loc=0, column='doc_id', value=unique_doc_ids)
+    new_data = new_data.drop(['part_nb'], axis=1)
+
     if dataFrame is None:
-        # 12 columns, ignore predicate arguments
-        columns = ['doc_id', 'part_nb', 'word_nb', 'word', 'pos', 'parse', 'predicate_lemma',
-                   'predicate_frame', 'word_sense', 'speaker', 'name_entities', 'coref']
-        dataFrame = pd.DataFrame(data_list, columns=columns)
+        dataFrame = new_data
+
     else:
-        dataFrame = dataFrame.append(pd.DataFrame(data_list, columns=dataFrame.columns))
+        dataFrame = dataFrame.append(new_data)
 
     return dataFrame
 
+def replace_pronoun(df):
+    first_persons = df.index[(df.word == 'I') | (df.word == 'me') | (df.word == 'myself')]
+    second_persons = df.index[(df.word == 'you') | (df.word == 'You') | (df.word == 'yourself')]
+    count = 0
+    speaker_list = df.speaker.values
+    previous_one = {}
+    next_one = {}
+
+    for i, speaker in enumerate(speaker_list):
+        if i > 0 and speaker_list[i-1] == speaker_list[i]:
+            continue
+        if i > 0:
+            previous_one[speaker] = speaker_list[i-1]
+        if i < len(speaker_list) - 1:
+            if speaker != speaker_list[i+1]:
+                next_one[speaker] = speaker_list[i+1]
+
+    for loc in second_persons:
+        current_speaker = df.iloc[loc].speaker
+        if current_speaker not in previous_one:  # first speaker
+            if current_speaker in next_one:
+                df.at[loc, 'word'] = SPEAKER_MAP[next_one[current_speaker]]
+        elif current_speaker not in next_one:  # last speaker
+            if current_speaker in previous_one:
+                df.at[loc, 'word'] = SPEAKER_MAP[previous_one[current_speaker]]
+        else:
+            if previous_one[current_speaker] == next_one[current_speaker]:
+                df.at[loc, 'word'] = SPEAKER_MAP[previous_one[current_speaker]]
+
+    for loc in first_persons:
+        speaker = SPEAKER_MAP.get(df.iloc[loc].speaker, '-')
+        if speaker != '-':
+            df.at[loc, 'word'] = speaker
+            # df.at[loc, 'pos'] = 'NNP'
+            count += 1
+
+    # print('\n', df.doc_id.values[0], count, ' pronouns replaced')
 
 def get_entities(df):
+    """returns {coref_id: {'start': [], 'end': [], 'stack': []}}"""
     coref_entities = {}
     prefix = re.compile('\(\d+')
     suffix = re.compile('\d+\)')
@@ -181,16 +231,23 @@ def get_entities(df):
         for item in starts:
             coref_id = df.iloc[i].doc_id + '-' + item[1:]
             if coref_id in coref_entities:
-                coref_entities[coref_id]['start'].append(i)
+                coref_entities[coref_id]['stack'].append(i)
             else:
-                coref_entities[coref_id] = {'start': [i], 'end': []}
+                coref_entities[coref_id] = {'start': [], 'end': [], 'stack': [i]}
 
         for item in ends:
             coref_id = df.iloc[i].doc_id + '-' + item[:-1]
             assert coref_id in coref_entities
             coref_entities[coref_id]['end'].append(i)
+            try:
+                start = coref_entities[coref_id]['stack'].pop()
+            except IndexError:
+                print("IndexError", df.iloc[i-3:i+3])
+                sys.exit()
+            coref_entities[coref_id]['start'].append(start)
 
     return coref_entities
+
 
 class Entity(object):
     def __init__(self, coref_id, df, start_loc, end_loc):
@@ -200,6 +257,7 @@ class Entity(object):
         self.coref_id = coref_id
         self.speaker = df.iloc[start_loc].speaker
         self.order = None
+        self.replace_space = True
 
         self.get_words()
         self.get_pos_tags()
@@ -207,7 +265,7 @@ class Entity(object):
         self.get_context_pos()
 
     def get_words(self):
-        self.words = [self.df.iloc[i].word for i in range(self.start_loc, self.end_loc+1)]
+        self.words = [self.df.iloc[i].word for i in range(self.start_loc, self.end_loc + 1)]
 
     def get_pos_tags(self):
         self.pos_tags = [self.df.iloc[i].pos for i in range(self.start_loc, self.end_loc + 1)]
@@ -230,17 +288,43 @@ class Entity(object):
 
     def get_context_representation(self):
         left_edge = max(0, self.start_loc - 8)
-        left_words = [self.df.iloc[i].word for i in range(left_edge, self.start_loc)]
+        # left_words = [self.df.iloc[i].word for i in range(left_edge, self.start_loc)]
+        left_words = []
+        for i in range(left_edge, self.start_loc):
+            left_words.append(self.df.iloc[i].word)
+            if self.replace_space \
+                    and self.df.iloc[i + 1].word_nb == 0 and self.df.iloc[i + 1].word not in ('.', '!', '?'):
+                left_words.append('.')
+
         right_edge = min(len(self.df), self.end_loc + 9)
-        right_words = [self.df.iloc[i].word for i in range(self.end_loc+1, right_edge)]
+        # right_words = [self.df.iloc[i].word for i in range(self.end_loc+1, right_edge)]
+        right_words = []
+        for i in range(self.end_loc+1, right_edge):
+            if self.replace_space \
+                    and self.df.iloc[i].word_nb == 0 and self.df.iloc[i].word not in ('.', '!', '?'):
+                right_words.append('.')
+            right_words.append(self.df.iloc[i].word)
 
         self.context_words =  left_words + ['_START_'] + self.words + ['_END_'] + right_words
 
     def get_context_pos(self):
         left_edge = max(0, self.start_loc - 8)
-        left_pos = [self.df.iloc[i].pos for i in range(left_edge, self.start_loc)]
+        # left_pos = [self.df.iloc[i].pos for i in range(left_edge, self.start_loc)]
+        left_pos = []
+        for i in range(left_edge, self.start_loc):
+            left_pos.append(self.df.iloc[i].pos)
+            if self.replace_space \
+                    and self.df.iloc[i + 1].word_nb == 0 and self.df.iloc[i + 1].word not in ('.', '!', '?'):
+                left_pos.append('.')
+
         right_edge = min(len(self.df), self.end_loc + 9)
-        right_pos = [self.df.iloc[i].pos for i in range(self.end_loc + 1, right_edge)]
+        # right_pos = [self.df.iloc[i].pos for i in range(self.end_loc + 1, right_edge)]
+        right_pos = []
+        for i in range(self.end_loc+1, right_edge):
+            if self.replace_space \
+                    and self.df.iloc[i].word_nb == 0 and self.df.iloc[i].word not in ('.', '!', '?'):
+                right_pos.append('.')
+            right_pos.append(self.df.iloc[i].pos)
 
         self.context_pos = left_pos + ['_START_POS_'] + self.pos_tags + ['_END_POS_'] + right_pos
 
@@ -389,6 +473,8 @@ class DataGen(object):
                 index_map = {}
                 # print("Generating data for %s" % doc_id)
                 doc_df = self.df.loc[self.df.doc_id == doc_id]
+                doc_df = doc_df.reset_index()
+                # replace_pronoun(doc_df)
                 doc_coref_entities = get_entities(doc_df)
 
                 # get entity list
@@ -401,6 +487,9 @@ class DataGen(object):
                         order, locations = entity.get_order(doc_coref_entities, locations=locations)
                         entities.append((order, entity))
 
+                # for e in entities:
+                #     print(e[1].start_loc, e[1].end_loc)
+
                 if not entities:
                     if test_data:
                         print("No entities found in file:", doc_id)
@@ -411,18 +500,36 @@ class DataGen(object):
                 if N < 2:
                     print("Only one entity in %s" % doc_id)
                     continue
-                elif N < 3:
-                    # entities.append(entities[0])  # expand a dyad to a triad
-                    N += 1
+                # elif N < 3:
+                #     # entities.append(entities[0])  # expand a dyad to a triad
+                #     N += 1
 
-                entities.insert(0, entities[0])  # always repeat the first entity
-                triad_indexes = combinations(range(N), 3)
+                if NEIGHBORHOOD != -1:
+                    entities.insert(0, entities[0])  # always repeat the first entity
+                    triad_indexes = combinations(range(N+1), 3)
+                else:
+                    triad_indexes = combinations(range(N), 2)
+                    # triad_indexes = [(item[0], item[0], item[1]) for item in combinations(range(N), 2)]
 
                 X = [[] for _ in range(15)]
                 Y = []
                 index = 0
-                for a, b, c in triad_indexes:
-                    triad = (entities[a], entities[b], entities[c])
+                for numbers in triad_indexes:
+                    if NEIGHBORHOOD != -1:
+                        a, b, c = numbers
+                        if a == b == 0 and c > 1 : continue
+                    else:
+                        b, c = numbers
+                        a = b
+                    # assert a <= b <= c
+                    try:
+                        triad = (entities[a], entities[b], entities[c])
+                    except IndexError:
+                        print(N, a, b, c)
+                        raise IndexError
+
+
+                    # print(triad[2].start_loc, triad[2].end_loc)
                     # if triad[1].start_loc < triad[0].start_loc or triad[2].start_loc < triad[1].start_loc:
                     #     print(doc_id, (triad[0].start_loc, triad[0].end_loc),
                     #                    (triad[1].start_loc, triad[1].end_loc),
@@ -431,7 +538,7 @@ class DataGen(object):
                     distances = DataGen.get_triad_distances(triad)
                     diameter = max([abs(item) for item in distances])  # maximum distance between entities
                     neighborhood = min([abs(item) for item in distances])  # minimum distance between entities
-                    if diameter <= max_distance and neighborhood <= NEIGHBORHOOD:
+                    if diameter <= max_distance and (neighborhood <= NEIGHBORHOOD or NEIGHBORHOOD == -1):
 
                         mention_spans = [triad[0].start_loc - triad[1].start_loc, triad[0].end_loc - triad[1].end_loc,
                                          triad[1].start_loc - triad[2].start_loc, triad[1].end_loc - triad[2].end_loc,
@@ -521,8 +628,12 @@ class DataGen(object):
 
     def get_word_indexes(self, word_list):
         # return [self.word_indexes[word] if word in self.word_indexes else self.word_indexes['UKN'] for word in word_list]
-        return [self.word_indexes[word] if word in self.word_indexes else self.word_indexes.get(word[0],
+        try:
+            return [self.word_indexes[word] if word in self.word_indexes else self.word_indexes.get(word[0],
                                             self.word_indexes['UKN']) for word in word_list]  # use the first letter
+        except IndexError:
+            print(word_list)
+            raise IndexError
 
     def get_pos_indexes(self, pos_list):
         return [self.pos_tags.index(pos) + 1 if pos in self.pos_tags else self.pos_tags.index('UKN') for pos in pos_list]
