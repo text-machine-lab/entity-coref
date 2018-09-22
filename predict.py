@@ -43,8 +43,6 @@ def scorer(path=None):
     print(proc.communicate()[0].decode('utf-8'))
 
 def main():
-    # from keras.models import load_model
-
 
     parser = argparse.ArgumentParser()
 
@@ -91,7 +89,6 @@ def main():
         pos_tags = pickle.load(f)
 
     df = build_dataFrame(args.test_dir, threads=1, suffix='auto_conll')
-    # df = build_dataFrame(args.test_dir, threads=1, suffix='corenlp_conll')
     if args.clustering_only:
         model = None
     elif args.keras:
@@ -109,13 +106,8 @@ def main():
         test_input_gen = test_gen.generate_triad_input(looping=True, test_data=True, threads=4, max_distance=args.max_distance)
         evaluator = TriadEvaluator(model, test_input_gen)
 
-        # evaluator.data_q_store = multiprocessing.Queue(maxsize=200)
-        # filler = multiprocessing.Process(target=evaluator.fill_q_store, args=())
-        # filler.start()
-        # evaluator.data_available = True
         evaluator.write_results(df, args.result_dir, n_iterations=n_files,
                                 clustering_only=args.clustering_only, compute_linkage=args.compute_linkage)
-        # filler.terminate()  # we cannot use daemons because filler has children
 
     else:
         test_gen = DataGen(df, word_indexes, pos_tags)

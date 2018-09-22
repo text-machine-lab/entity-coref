@@ -15,9 +15,7 @@ def clustering(raw_pair_results, binarize=False, t=1.7, criterion='distance', me
             return 1.0  # This is the minumum distance
         if (e1, e2) in pair_results:
             similarity = max(pair_results[(e1, e2)], 1e-3)
-            # dist = 1 - pair_results[(e1, e2)] #+ 1e-4
             dist = min(1.0 / (similarity), 10.0)
-            # dist = (10 * (1 - pair_results[(e1, e2)])) ** 2
         else:
             dist = t + 0.2
         if binarize:

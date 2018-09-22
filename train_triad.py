@@ -20,11 +20,6 @@ def main():
                         default=None,
                         help="Directory containing validation annotations")
 
-    # parser.add_argument("--no_ntm",
-    #                     action='store_true',
-    #                     default=False,
-    #                     help="specify whether to use neural turing machine. default is to use ntm (no_ntm=false).")
-
     parser.add_argument("--neg_ratio",
                         default=0.8,
                         type=float,
@@ -56,7 +51,7 @@ def main():
     with open(os.path.join(args.model_destination, 'pos_tags.pkl'), 'wb') as f:
         pickle.dump(train_gen.pos_tags, f)
 
-    if args.keras:
+    if args.keras:  # keras model
         from src.keras_models import train
         train(train_gen=train_gen,
               model_destination=args.model_destination,

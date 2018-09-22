@@ -59,7 +59,6 @@ class Evaluator(object):
             doc_id = key[0]
             length = len(df.loc[df.doc_id == doc_id])
 
-            # print("Saving %s results..." % doc_id)
             sys.stdout.write("Saving results %d / %d\r" % (i + 1, n_files))
             sys.stdout.flush()
             corefs = ['-' for i in range(length)]
@@ -87,21 +86,8 @@ class Evaluator(object):
 class TriadEvaluator(object):
     def __init__(self, model, test_input_gen, file_batch=10):
         self.model = model
-        # self.test_data_gen = test_data_gen
-        # self.test_input_gen = test_data_gen.generate_triad_input(file_batch=file_batch, threads=1)
         self.test_input_gen = test_input_gen
         self.data_q_store = multiprocessing.Queue(maxsize=5)
-        # self.data_available = False
-
-    # def fill_q_store(self):
-    #     print("evaluator data filler started...")
-    #     self.data_available = True
-    #     while True:
-    #         if not self.data_q_store.full():
-    #             self.data_q_store.put(self.test_input_gen.next())
-    #         else:
-    #             time.sleep(1)
-    #     self.data_available = False
 
     def fast_eval(self):
         """Fast evaluation from a subset of test files
@@ -110,7 +96,6 @@ class TriadEvaluator(object):
         # assert self.data_available
         Y_true = []
         Y_pred = []
-        # test_data_q = self.data_q_store.get()
         test_data_q = next(self.test_input_gen)
         for data in test_data_q:
             if len(data) == 3:
@@ -140,20 +125,9 @@ class TriadEvaluator(object):
         processed_docs = set([])
         doc_ids = df.doc_id.unique()
         i = n_iterations
-        # i = n_iterations -3 #  ignore large files for fast evaluation
         t = 3.6
-        # t = 1.7
         method = 'average'
-        # method = 'single'
         criterion = 'distance'
-
-        # old_files = glob.glob(os.path.join(dest_path, 'responses/*'))
-        # for count, f in enumerate(old_files):
-        #     os.remove(f)
-        #     count += 1
-        #     sys.stdout.write('%d old result files removed...\r' % count)
-        #     sys.stdout.flush()
-        # sys.stdout.write('\n')
 
         while i > 0:
             if not clustering_only:
@@ -168,7 +142,6 @@ class TriadEvaluator(object):
 
                 doc_id = list(index_map.keys())[0][0]  # python3 does not support keys() as a list
 
-                # if doc_id != 'bc/cnn/00/cnn_0008-8': i -= 1; continue  # for debugging
 
                 if doc_id in processed_docs:
                     # print("%s already processed before!" % doc_id)
@@ -207,31 +180,20 @@ class TriadEvaluator(object):
                 for key, value in pair_results.items():
                     if doc_df.iloc[key[0][0]].word == doc_df.iloc[key[1][0]].word and doc_df.iloc[key[1][0]].word in speakers:
                         mean_value = 1.0  # maximum value
-                    # elif key[1][0] == key[1][1] and doc_df.iloc[key[1][0]].word in ('him', 'me', 'them', 'us') \
-                    #         and key[1][0] - key[0][1] < 5 and doc_df.iloc[key[1][0]].word != doc_df.iloc[key[0][0]].word:
-                    #     mean_value = 0.0
                     else:
                         mean_value = TriadEvaluator.top_n_mean(value, 0)
-                        # mean_value = TriadEvaluator.bottom_n_mean(value, 3)
-                        # mean_value = TriadEvaluator.last_n_values(value, 3)
                     pair_results_mean[key] = mean_value
                     all_pairs_pred.append(mean_value)
                     all_pairs_true.append(pair_true[key])
 
-                # pair_results_mean = TriadEvaluator.attach_proper_names(pair_results_mean, doc_df)
                 locs, clusters, linkage = clustering(pair_results_mean, binarize=False, t=t, method=method)
                 _, clusters_true, linkage_true = clustering(pair_true, binarize=False, t=t, method=method)
 
                 clusters = TriadEvaluator.remove_singletons(clusters)
-                # TriadEvaluator.attach_singletons(linkage, t=t)
-
-                # np.save(os.path.join(dest_path, 'true-linkages', doc_id.split('/')[-1] + '.npy'), linkage_true)
 
             else:  # clustering only
                 from scipy.cluster.hierarchy import inconsistent, fcluster
                 doc_id = doc_ids[i - 1]
-
-                # if doc_id != 'bc/msnbc/00/msnbc_0007-9': i -= 1; continue  # for debugging
 
                 doc_df = df.loc[df.doc_id == doc_id]
                 doc_df = doc_df.reset_index()
@@ -249,7 +211,6 @@ class TriadEvaluator(object):
 
                     pair_results_mean = {}
                     for key, value in pair_results.items():
-                        # mean_value = TriadEvaluator.top_n_mean(value, 0)
                         if doc_df.iloc[key[1][0]].word in (doc_df.iloc[key[0][0]].word, doc_df.iloc[key[0][1]].word) and doc_df.iloc[key[1][0]].word in speakers:
                             mean_value = 1.0  # maximum value
                         else:
@@ -259,9 +220,6 @@ class TriadEvaluator(object):
                     pair_results_mean = TriadEvaluator.attach_proper_names(pair_results_mean, doc_df)
                     locs, clusters, linkage = clustering(pair_results_mean, binarize=False, t=t, method=method)
                     locs, clusters, linkage = TriadEvaluator.pick_antecedent(pair_results_mean, doc_df, locs, clusters, linkage, t, method)
-                    # locs, clusters, linkage = clustering(pair_results_mean, binarize=False, t=t, method=method)
-
-                    # np.save(os.path.join(dest_path, 'linkages', doc_id.split('/')[-1] + '.npy'), linkage)
 
 
                 else:
@@ -273,11 +231,7 @@ class TriadEvaluator(object):
                     clusters = fcluster(linkage, criterion=criterion, depth=2, R=None, t=t)
 
 
-                # TriadEvaluator.attach_singletons(linkage, t=t)  # this modifies linkage
-                # clusters = fcluster(linkage, criterion=criterion, depth=2, R=None, t=t)
                 clusters = TriadEvaluator.remove_singletons(clusters)
-                # print(clusters)
-                # np.save(os.path.join(dest_path, 'linkages', doc_id.split('/')[-1] + '.npy'), linkage)
 
             if save_dendrograms:
                 np.save(os.path.join(dest_path, 'linkages', doc_id.split('/')[-1] + '.npy'), linkage)
@@ -389,29 +343,10 @@ class TriadEvaluator(object):
         n = len(linkage) + 1
         clusters = np.where(linkage[:, 2] > t)[0]
         mentions = np.where(linkage[:, 0] < n)[0]
-        # mentions = range(n)
         singletons = set(clusters).intersection(set(mentions))
         for singleton in singletons:
             linkage[singleton, 2] = t - 0.1
         print("singletons attached", singletons)
-
-        # counter = defaultdict(int)
-        # singletons = []
-        # for item in clusters:
-        #     counter[item] += 1
-        # for i, item in enumerate(clusters):
-        #     if counter[item] == 1:
-        #         singletons.append(locs[i])
-        #
-        # for loc in singletons:
-        #     best_score = 0
-        #     best_match = None
-        #     for pair in all_pair_results:
-        #         if tuple(loc) in pair:
-        #             if all_pair_results[pair] > best_score:
-        #                 best_score = all_pair_results[pair]
-        #                 best_match = pair
-        #     all_pair_results[best_match] = 1.0
 
     @staticmethod
     def remove_embeds(locs, clusters):
@@ -439,9 +374,6 @@ class TriadEvaluator(object):
                     return False
             return True
 
-        # if iters > 5:
-        #     return locs, clusters, linkage
-
         locs = [tuple(loc) for loc in locs]  # convert list to tuple
         loc2cluster = dict(zip(locs, clusters))
         cluster2locs = defaultdict(list)
@@ -462,10 +394,8 @@ class TriadEvaluator(object):
             return locs, clusters, linkage
 
         for loc in leading_pronouns:
-            # print(loc)
             pre_candidates = [(key, all_pair_results[key]) for key in all_pair_results if key[1] == loc \
                                 and key[0][0] !=  key[1][0]]
-                              # and (key[0][0] != key[0][1] or doc_df.iloc[key[0][0]].word.lower() not in pronouns)]
             post_candidates = [(key, all_pair_results[key]) for key in all_pair_results if key[0] == loc \
                                and (key[1][0] != key[1][1] or doc_df.iloc[key[1][0]].word.lower() not in pronouns) \
                                and key[0][0] !=  key[1][0]]
@@ -474,12 +404,10 @@ class TriadEvaluator(object):
             if len(post_candidates) > 2:
                 post_candidates = sorted(post_candidates)[:2]
             candidates = pre_candidates + post_candidates
-            # print(loc, candidates)
 
             if not candidates:
                 continue
             match = sorted(candidates, key=lambda x: x[1])[-1][0]  # loc
-            # print(match)
             cluster = loc2cluster[loc]
             other_locs = cluster2locs[cluster]
             if loc == match[0]:
@@ -498,7 +426,6 @@ class TriadEvaluator(object):
                         pair_results[loc1, loc2] = 1.0
                         pair_results[loc2, loc1] = 1.0
 
-            # print("found antecedent", doc_df.iloc[0].doc_id, match[0][0], match[1][0], doc_df.iloc[match[0][0]].word, doc_df.iloc[match[1][0]].word)
         print('%d recursion(s) finished in' %(iters + 1), doc_df.iloc[0].doc_id)
 
         locs, clusters, linkage = clustering(pair_results, binarize=False, t=t, method=method)
@@ -518,7 +445,6 @@ class TriadEvaluator(object):
                         score = all_pair_results[(loc2, loc1)]
                     else:
                         continue
-                    # if score != t + 0.2:  # this is a fake score assigned by clustering algorithm
                     accumulate += min(10, 1/score)
                     count += 1
             if count == 0:
@@ -550,7 +476,6 @@ class TriadEvaluator(object):
         merged = len(set(original_clusters)) - len(set(new_clusters))
         if merged:
             print("%d out of %d clusters merged in %s" % (merged + 1, len(set(original_clusters)), doc_id))
-            # print(original_clusters, new_clusters)
 
         return new_clusters
 
@@ -629,11 +554,6 @@ class TriadEvaluator(object):
                     words += doc_df.iloc[i].word
                 identicals[words].update([e1, e2])
 
-            # elif re.search('(PERSON)|(ORG)', doc_df.iloc[e1[-1]].name_entities) and doc_df.iloc[e1[-1]].word != doc_df.iloc[e2[-1]].word:
-            #     "President Obama vs President Trump"
-            #     all_pair_results[e1, e2] = 0.1
-            #     all_pair_results[e2, e1] = 0.1
-
         # print(identicals)
         groups = [tuple(sorted(list(v))) for k, v in identicals.items()]
 
@@ -647,28 +567,6 @@ class TriadEvaluator(object):
                     all_pair_results[locs[i], locs[j]] = 1.0
                     all_pair_results[locs[j], locs[i]] = 1.0
 
-
-        # # for group in reduced_groups:
-        # #     print(group)
-        #
-        # for locs in reduced_groups:
-        #     score_map = {}
-        #     for pair in pair_results:
-        #         if pair[0] in locs:
-        #             target = pair[1]
-        #         elif pair[1] in locs:
-        #             target = pair[0]
-        #         else:
-        #             continue
-        #
-        #         if target not in score_map:
-        #             scores = [all_pair_results[(source, target)] for source in locs if (source, target) in all_pair_results]
-        #             use_score = max(scores)  # sum(scores) / len(scores)
-        #             score_map[target] = use_score
-        #             for loc in locs:
-        #                 # if (loc, target) in all_pair_results:
-        #                 all_pair_results[(loc, target)] = use_score
-        #                 all_pair_results[(target, loc)] = use_score
 
         for key in all_pair_results:
             if all_pair_results[key] != 0.0:
