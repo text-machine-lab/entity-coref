@@ -4,7 +4,7 @@ This code is the implementation of our paper "Triad-based Neural Network for Cor
 It is a modified version of our COLING 2018 paper http://www.aclweb.org/anthology/C18-1004
 In the new paper, we corrected some errors and added more analyses.
 
-Copyright (c) 2017 UMass Lowell - All Rights Reserved
+Copyright (c) 2018 UMass Lowell - All Rights Reserved
 
 You may use, distribute and modify this code under the terms of the Apache 2.0 license. See https://www.apache.org/licenses/LICENSE-2.0 for details.
 
