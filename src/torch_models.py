@@ -43,17 +43,17 @@ class CorefTagger(nn.Module):
 
     def process_words(self, input_words):
         word_emb_0 = self.WordEmbedding(input_words[0])
-        word_emb_0 = F.dropout(word_emb_0, p=0.5)
+        word_emb_0 = F.dropout(word_emb_0, p=0.5, training=self.training)
         word_lstm_0, _ = self.WordLSTM(word_emb_0)  # (batch, seq, feature)
         # word_lstm_0, _ = torch.max(word_lstm_0, dim=1, keepdim=False)  # (batch, feature)
 
         word_emb_1 = self.WordEmbedding(input_words[1])
-        word_emb_1 = F.dropout(word_emb_1, p=0.5)
+        word_emb_1 = F.dropout(word_emb_1, p=0.5, training=self.training)
         word_lstm_1, _ = self.WordLSTM(word_emb_1)  # (batch, seq, feature)
         # word_lstm_1, _ = torch.max(word_lstm_1, dim=1, keepdim=False)  # (batch, feature)
 
         word_emb_2 = self.WordEmbedding(input_words[2])
-        word_emb_2 = F.dropout(word_emb_2, p=0.5)
+        word_emb_2 = F.dropout(word_emb_2, p=0.5, training=self.training)
         word_lstm_2, _ = self.WordLSTM(word_emb_2)  # (batch, seq, feature)
         # word_lstm_2, _ = torch.max(word_lstm_2, dim=1, keepdim=False)  # (batch, feature)
 
@@ -103,18 +103,18 @@ class CorefTagger(nn.Module):
 
         concat01 = torch.cat(
             [input_distances[0], input_distances[1], input_speakers[0], word_lstms[0], pos_lstms[0], word_lstms[1], pos_lstms[1]], -1)
-        hidden01_1 = F.relu(F.dropout(self.PairHidden_1(concat01), p=0.2))
-        hidden01_2 = F.relu(F.dropout(self.PairHidden_2(hidden01_1), p=0.2))
+        hidden01_1 = F.relu(F.dropout(self.PairHidden_1(concat01), p=0.2, training=self.training))
+        hidden01_2 = F.relu(F.dropout(self.PairHidden_2(hidden01_1), p=0.2, training=self.training))
 
         concat12 = torch.cat(
             [input_distances[2], input_distances[3], input_speakers[1], word_lstms[1], pos_lstms[1], word_lstms[2], pos_lstms[2]], -1)
-        hidden12_1 = F.relu(F.dropout(self.PairHidden_1(concat12), p=0.2))
-        hidden12_2 = F.relu(F.dropout(self.PairHidden_2(hidden12_1), p=0.2))
+        hidden12_1 = F.relu(F.dropout(self.PairHidden_1(concat12), p=0.2, training=self.training))
+        hidden12_2 = F.relu(F.dropout(self.PairHidden_2(hidden12_1), p=0.2, training=self.training))
 
         concat20 = torch.cat(
             [input_distances[4], input_distances[5], input_speakers[2], word_lstms[0], pos_lstms[0], word_lstms[2], pos_lstms[2]], -1)
-        hidden20_1 = F.relu(F.dropout(self.PairHidden_1(concat20), p=0.2))
-        hidden20_2 = F.relu(F.dropout(self.PairHidden_2(hidden20_1), p=0.2))
+        hidden20_1 = F.relu(F.dropout(self.PairHidden_1(concat20), p=0.2, training=self.training))
+        hidden20_2 = F.relu(F.dropout(self.PairHidden_2(hidden20_1), p=0.2, training=self.training))
 
         hidden_shared = hidden01_2 + hidden12_2 + hidden20_2
         context = F.relu(self.Context(hidden_shared))
@@ -136,6 +136,7 @@ class CorefTagger(nn.Module):
         return individual_loss
 
     def fit(self, X, y):
+        self.train()
         if y.size()[-1] == 3:
             y = y[:, 1:]
 
@@ -149,6 +150,7 @@ class CorefTagger(nn.Module):
         return loss.data.item(), acc
 
     def evaluate(self, X, y):
+        self.eval()
         if y.size()[-1] == 3:
             y = y[:, 1:]
         with torch.no_grad():
@@ -160,7 +162,7 @@ class CorefTagger(nn.Module):
 
     def predict(self, X_np):
         """Takes numpy array as input"""
-
+        self.eval()
         with torch.no_grad():
             X = [autograd.Variable(torch.from_numpy(x).type(torch.cuda.LongTensor)) for x in X_np]
             pred = self.forward(X)

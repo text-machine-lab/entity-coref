@@ -84,10 +84,12 @@ class Evaluator(object):
 
 
 class TriadEvaluator(object):
-    def __init__(self, model, test_input_gen, file_batch=10):
+    def __init__(self, model, test_input_gen, data_maker=slice_data, group_size=100):
         self.model = model
         self.test_input_gen = test_input_gen
         self.data_q_store = multiprocessing.Queue(maxsize=5)
+        self.data_maker = data_maker
+        self.group_size = group_size
 
     def fast_eval(self):
         """Fast evaluation from a subset of test files
@@ -100,9 +102,9 @@ class TriadEvaluator(object):
         for data in test_data_q:
             if len(data) == 3:
                 data = data[:2]
-            for X, y in slice_data(data, 100):
+            for X, y in self.data_maker(data, self.group_size, batch_size=10):
                 if y.shape[-1] == 3:
-                    y = y[:, 1:]
+                    y = y[:, 1:] if len(y.shape) == 2 else y[:, :, 1:]
                 pred = self.model.predict(X) # (group_size, 3)
                 Y_true.append(y)
                 Y_pred.append(pred)
@@ -126,8 +128,10 @@ class TriadEvaluator(object):
         doc_ids = df.doc_id.unique()
         i = n_iterations
         t = 3.6
+        # t = 3.4
         method = 'average'
         criterion = 'distance'
+        print("clustering parameters: t={}, method={}, criterion={}".format(t, method, criterion))
 
         while i > 0:
             if not clustering_only:
@@ -138,7 +142,7 @@ class TriadEvaluator(object):
                     continue
                 X, y, index_map = test_data_q[0]
                 if y.shape[-1] == 3:
-                    y = y[:, 1:]
+                    y = y[:, 1:] if len(y.shape) == 2 else y[:, :, 1:]
 
                 doc_id = list(index_map.keys())[0][0]  # python3 does not support keys() as a list
 
@@ -149,7 +153,7 @@ class TriadEvaluator(object):
                     continue
                 processed_docs.add(doc_id)
                 pred = []
-                for X, _ in slice_data([X, y], 50):  # do this to avoid very large batches
+                for X, _ in self.data_maker([X, y], self.group_size, batch_size=1):  # batch size 1 to avoid random orders of parts
                     pred.append(self.model.predict(X))
                 pred = np.concatenate(pred)
                 pred = np.reshape(pred, [-1, 2])  # in case there are batches
@@ -181,7 +185,8 @@ class TriadEvaluator(object):
                     if doc_df.iloc[key[0][0]].word == doc_df.iloc[key[1][0]].word and doc_df.iloc[key[1][0]].word in speakers:
                         mean_value = 1.0  # maximum value
                     else:
-                        mean_value = TriadEvaluator.top_n_mean(value, 0)
+                        # mean_value = TriadEvaluator.top_n_mean(value, 0)
+                        mean_value = TriadEvaluator.top_n_mean(value, 3)
                     pair_results_mean[key] = mean_value
                     all_pairs_pred.append(mean_value)
                     all_pairs_true.append(pair_true[key])
@@ -229,7 +234,6 @@ class TriadEvaluator(object):
                         locs = pickle.load(f)
 
                     clusters = fcluster(linkage, criterion=criterion, depth=2, R=None, t=t)
-
 
                 clusters = TriadEvaluator.remove_singletons(clusters)
 
@@ -426,7 +430,7 @@ class TriadEvaluator(object):
                         pair_results[loc1, loc2] = 1.0
                         pair_results[loc2, loc1] = 1.0
 
-        print('%d recursion(s) finished in' %(iters + 1), doc_df.iloc[0].doc_id)
+        # print('%d recursion(s) finished in' %(iters + 1), doc_df.iloc[0].doc_id)
 
         locs, clusters, linkage = clustering(pair_results, binarize=False, t=t, method=method)
         return TriadEvaluator.pick_antecedent(pair_results, doc_df, locs, clusters, linkage, t, method, iters=iters+1)

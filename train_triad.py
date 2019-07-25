@@ -31,14 +31,14 @@ def main():
                         help="Load saved model and resume training from there")
 
     parser.add_argument("--epochs",
-                        default=400,
+                        default=200,
                         type=int,
                         help="Load saved model and resume training from there")
 
-    parser.add_argument("--keras",
-                        action='store_true',
-                        default=False,
-                        help="Use keras model")
+    parser.add_argument("--model_type",
+                        default="gcl",
+                        type=str,
+                        help="chose 'keras', 'pytorch', or 'gcl' ")
 
     args = parser.parse_args()
 
@@ -51,21 +51,31 @@ def main():
     with open(os.path.join(args.model_destination, 'pos_tags.pkl'), 'wb') as f:
         pickle.dump(train_gen.pos_tags, f)
 
-    if args.keras:  # keras model
+    assert args.model_type in ('keras', 'pytorch', 'gcl')
+    if args.model_type == 'keras':  # keras model
         from src.keras_models import train
         train(train_gen=train_gen,
               model_destination=args.model_destination,
               val_dir=args.val_dir,
               load_model=args.load_model,
               epochs=args.epochs)
-    else:  # pytorch model
+    elif args.model_type == 'pytorch':  # pytorch model
         from src.torch_models import train
         train(train_gen=train_gen,
               model_destination=args.model_destination,
               val_dir=args.val_dir,
               load_model=args.load_model,
               epochs=args.epochs)
-
+    else:  # pytorch gcl model
+        from src.gcl_models import train
+        train(train_gen=train_gen,
+              model_destination=args.model_destination,
+              val_dir=args.val_dir,
+              load_model=args.load_model,
+              epochs=args.epochs,
+              group_size=40,
+              batch_size=25,
+              model_type=args.model_type)
 
 if __name__ == "__main__":
     main()

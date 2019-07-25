@@ -77,6 +77,14 @@ def pad_sequences(sequences, maxlen=None, dtype='int32',
     return x
 
 
+def custom_combinations(N):
+    """Generate number triads, sorted by last item"""
+    for c in range(2, N):
+        comb2 = combinations(range(c), 2)
+        for a, b in comb2:
+            yield a, b, c
+
+
 def build_dataFrame(path, threads=4, suffix='gold_conll'):
     def worker(pid):
         print("worker %d started..." % pid)
@@ -258,6 +266,11 @@ class Entity(object):
         self.speaker = df.iloc[start_loc].speaker
         self.order = None
         self.replace_space = True
+
+        self.words = []
+        self.pos_tags = []
+        self.context_words = []
+        self.context_pos = []
 
         self.get_words()
         self.get_pos_tags()
@@ -487,9 +500,6 @@ class DataGen(object):
                         order, locations = entity.get_order(doc_coref_entities, locations=locations)
                         entities.append((order, entity))
 
-                # for e in entities:
-                #     print(e[1].start_loc, e[1].end_loc)
-
                 if not entities:
                     if test_data:
                         print("No entities found in file:", doc_id)
@@ -506,7 +516,8 @@ class DataGen(object):
 
                 if NEIGHBORHOOD != -1:
                     entities.insert(0, entities[0])  # always repeat the first entity
-                    triad_indexes = combinations(range(N+1), 3)
+                    # triad_indexes = combinations(range(N+1), 3)
+                    triad_indexes = custom_combinations(N+1)
                 else:
                     triad_indexes = combinations(range(N), 2)
                     # triad_indexes = [(item[0], item[0], item[1]) for item in combinations(range(N), 2)]
@@ -665,7 +676,7 @@ class DataGen(object):
         print(all_pos_tags)
         self.pos_tags = np.append(all_pos_tags, ['_START_POS_', '_END_POS_', 'UKN']).tolist()
 
-def slice_data(data, group_size):
+def slice_data(data, group_size, **kwargs):
     """Slice data to equal size
         group_size: # instances to yield each time. If 0 or None, yield all
     """
@@ -694,7 +705,7 @@ def slice_data(data, group_size):
             y_out = y[indexes]
             yield X_out, y_out
 
-def group_data(data, group_size, batch_size=None):
+def group_data(data, group_size, batch_size=10, full_batch=False):
     X_out = None
     y_out = None
     for slice in slice_data(data, group_size):
@@ -708,18 +719,24 @@ def group_data(data, group_size, batch_size=None):
             X_out = [np.concatenate((X_out[i], X[i]), axis=0) for i in range(len(X))]
             y_out = np.concatenate((y_out, y), axis=0)
 
+        # if a batch is full, yield immediately
         if batch_size is not None and batch_size == y_out.shape[0]:
             yield X_out, y_out
             X_out = None
             y_out = None
 
-    if batch_size is None: # a yield for a file, whatever size
+    # if batch size is not given, yield data from a file
+    if batch_size is None:
         yield X_out, y_out
 
-    # make batch full
+    # if there is leftover
     elif y_out is not None:
-        to_add = batch_size - y_out.shape[0]
-        for _ in range(to_add):
-            X_out = [np.concatenate([X_out[i], item]) for i, item in enumerate(X)]
-            y_out = np.concatenate([y_out, y])
-        yield X_out, y_out
+        if full_batch:
+            # make batch full
+            to_add = batch_size - y_out.shape[0]
+            for _ in range(to_add):
+                X_out = [np.concatenate([X_out[i], item]) for i, item in enumerate(X)]
+                y_out = np.concatenate([y_out, y])
+            yield X_out, y_out
+        else:
+            yield X_out, y_out
